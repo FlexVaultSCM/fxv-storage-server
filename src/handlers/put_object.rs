@@ -1,5 +1,6 @@
 use crate::etag;
 use crate::multipart_state::{PartEntry, SharedUploadState};
+use crate::s3_xml_compat::{err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed};
 use crate::store::{FileEntry, SharedStore};
 use crate::AppState;
 use axum::{
@@ -53,12 +54,7 @@ async fn put_object(
     // Sanitise the key against path traversal
     let rel_path = match sanitize_key(&key) {
         Some(p) => p,
-        None => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400");
-        }
+        None => return err_invalid_argument("The specified object key is invalid."),
     };
 
     let abs_path = serve_dir.join(&rel_path);
@@ -78,27 +74,14 @@ async fn put_object(
         let existing = s.get(&key);
         match (existing, if_match.as_deref(), if_none_match.as_deref()) {
             // If-None-Match: * means "fail if object already exists"
-            (Some(_), _, Some("*")) => {
-                return Response::builder()
-                    .status(StatusCode::PRECONDITION_FAILED)
-                    .body(Body::empty())
-                    .expect("build 412");
-            }
+            (Some(_), _, Some("*")) => return err_precondition_failed(),
             // If-Match: must match existing ETag
             (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
-                return Response::builder()
-                    .status(StatusCode::PRECONDITION_FAILED)
-                    .body(Body::empty())
-                    .expect("build 412");
+                return err_precondition_failed();
             }
             (Some(_), Some(_), _) => {}
             // If-Match specified but object does not exist → 412
-            (None, Some(_), _) => {
-                return Response::builder()
-                    .status(StatusCode::PRECONDITION_FAILED)
-                    .body(Body::empty())
-                    .expect("build 412");
-            }
+            (None, Some(_), _) => return err_precondition_failed(),
             _ => {}
         }
     }
@@ -125,10 +108,7 @@ async fn put_object(
         Err(e) => {
             warn!("Failed to write temp file {:?}: {}", tmp_path, e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .expect("build 500");
+            return err_internal();
         }
     };
 
@@ -136,10 +116,7 @@ async fn put_object(
     if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
         warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
         let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .expect("build 500");
+        return err_internal();
     }
 
     // Persist ETag to the disk cache
@@ -180,21 +157,11 @@ async fn upload_part(
 ) -> Response {
     let part_number = match params.part_number {
         Some(n) if (1..=10_000).contains(&n) => n,
-        _ => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400");
-        }
+        _ => return err_invalid_argument("Part number must be between 1 and 10000."),
     };
     let upload_id = match params.upload_id {
         Some(id) => id,
-        None => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400");
-        }
+        None => return err_invalid_argument("A valid uploadId must be provided."),
     };
 
     // Verify the upload exists and targets this key
@@ -202,18 +169,8 @@ async fn upload_part(
         let uploads = state.uploads.read().await;
         match uploads.get(&upload_id) {
             Some(entry) if entry.key == key => {}
-            Some(_) => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .expect("build 400 key mismatch");
-            }
-            None => {
-                return Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
-                    .expect("build 404 upload not found");
-            }
+            Some(_) => return err_invalid_argument("The upload ID is not associated with this key."),
+            None => return err_no_such_upload(),
         }
     }
 
@@ -233,10 +190,7 @@ async fn upload_part(
         Err(e) => {
             warn!("Failed to write part temp file {:?}: {}", tmp_path, e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .expect("build 500");
+            return err_internal();
         }
     };
 

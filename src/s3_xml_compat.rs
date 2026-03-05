@@ -2,7 +2,54 @@
 ///
 /// These structs are serialised/deserialised with `quick-xml` + `serde`.
 /// Only the fields needed for our implementation are included.
+use axum::{body::Body, http::StatusCode, response::Response};
 use serde::{Deserialize, Serialize};
+
+// ── S3 error responses ───────────────────────────────────────────────────────
+
+/// Build an S3-compatible XML error `Response`.
+///
+/// ```xml
+/// <?xml version="1.0" encoding="UTF-8"?>
+/// <Error><Code>NoSuchKey</Code><Message>...</Message></Error>
+/// ```
+pub fn s3_error(status: StatusCode, code: &str, message: &str) -> Response {
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>{}</Code><Message>{}</Message></Error>"#,
+        code, message
+    );
+    Response::builder()
+        .status(status)
+        .header("Content-Type", "application/xml")
+        .body(Body::from(xml))
+        .expect("build error response")
+}
+
+// Pre-defined S3 error constructors matching the standard error codes.
+pub fn err_no_such_key() -> Response {
+    s3_error(StatusCode::NOT_FOUND, "NoSuchKey", "The specified key does not exist.")
+}
+pub fn err_no_such_upload() -> Response {
+    s3_error(StatusCode::NOT_FOUND, "NoSuchUpload", "The specified upload does not exist. The upload ID may be invalid, or the upload may have been aborted or completed.")
+}
+pub fn err_precondition_failed() -> Response {
+    s3_error(StatusCode::PRECONDITION_FAILED, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold.")
+}
+pub fn err_invalid_range() -> Response {
+    s3_error(StatusCode::RANGE_NOT_SATISFIABLE, "InvalidRange", "The requested range is not satisfiable.")
+}
+pub fn err_invalid_argument(msg: &str) -> Response {
+    s3_error(StatusCode::BAD_REQUEST, "InvalidArgument", msg)
+}
+pub fn err_invalid_part() -> Response {
+    s3_error(StatusCode::BAD_REQUEST, "InvalidPart", "One or more of the specified parts could not be found. The part may not have been uploaded, or the specified entity tag may not match the part's entity tag.")
+}
+pub fn err_malformed_xml() -> Response {
+    s3_error(StatusCode::BAD_REQUEST, "MalformedXML", "The XML you provided was not well-formed or did not validate against our schema.")
+}
+pub fn err_internal() -> Response {
+    s3_error(StatusCode::INTERNAL_SERVER_ERROR, "InternalError", "We encountered an internal error. Please try again.")
+}
 
 // ── CreateMultipartUpload response ──────────────────────────────────────────
 

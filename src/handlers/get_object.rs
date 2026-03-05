@@ -1,5 +1,6 @@
 use crate::conditional::{self, ConditionalResult};
 use crate::range;
+use crate::s3_xml_compat::{err_internal, err_invalid_range, err_no_such_key, err_precondition_failed};
 use crate::AppState;
 use axum::{
     body::Body,
@@ -19,12 +20,7 @@ pub async fn get_object(
     let store = state.store.read().await;
     let entry = match store.get(&key) {
         Some(e) => e.clone(),
-        None => {
-            return Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::empty())
-                .expect("build 404");
-        }
+        None => return err_no_such_key(),
     };
 
     // Parse conditional headers
@@ -68,12 +64,7 @@ pub async fn get_object(
                 .body(Body::empty())
                 .expect("build 304");
         }
-        ConditionalResult::PreconditionFailed => {
-            return Response::builder()
-                .status(StatusCode::PRECONDITION_FAILED)
-                .body(Body::empty())
-                .expect("build 412");
-        }
+        ConditionalResult::PreconditionFailed => return err_precondition_failed(),
         ConditionalResult::Proceed => {}
     }
 
@@ -81,27 +72,20 @@ pub async fn get_object(
     let byte_range = match range::parse_range(range_header.as_deref(), entry.size) {
         Ok(r) => r,
         Err(_) => {
-            // 416 Range Not Satisfiable
-            return Response::builder()
-                .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(
-                    header::CONTENT_RANGE,
-                    format!("bytes */{}", entry.size),
-                )
-                .body(Body::empty())
-                .expect("build 416");
+            // 416 Range Not Satisfiable — include Content-Range: bytes */size per RFC 7233
+            let mut resp = err_invalid_range();
+            resp.headers_mut().insert(
+                header::CONTENT_RANGE,
+                format!("bytes */{}", entry.size).parse().expect("content-range"),
+            );
+            return resp;
         }
     };
 
     // Open the file
     let mut file = match tokio::fs::File::open(&entry.abs_path).await {
         Ok(f) => f,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .expect("build 500");
-        }
+        Err(_) => return err_internal(),
     };
 
     let last_modified_str = fmt_http_date(entry.modified);
@@ -132,10 +116,7 @@ pub async fn get_object(
                 .await
                 .is_err()
             {
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::empty())
-                    .expect("build 500");
+                return err_internal();
             }
             let limited = tokio::io::AsyncReadExt::take(file, range.len());
             let stream = tokio_util::io::ReaderStream::new(limited);

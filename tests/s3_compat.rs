@@ -92,10 +92,7 @@ async fn s3_put_object_and_get_object() {
 
 // ── GetObject: 404 for missing key ───────────────────────────────────────────
 
-/// Our server returns a plain HTTP 404 with no body.
-/// The AWS SDK cannot map this to `NoSuchKey` without an S3 XML error body
-/// (`<Error><Code>NoSuchKey</Code>...</Error>`), so it surfaces "NotFound" instead.
-/// This test verifies the raw 404 status; see the compatibility notes below.
+/// The server now returns S3-format XML error bodies, so the SDK maps 404 → NoSuchKey.
 #[tokio::test]
 async fn s3_get_object_not_found() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -110,16 +107,13 @@ async fn s3_get_object_not_found() {
         .await;
 
     assert!(result.is_err(), "Expected error for missing key");
-    let raw_status = result
-        .unwrap_err()
-        .raw_response()
-        .expect("raw response")
-        .status()
-        .as_u16();
-    assert_eq!(raw_status, 404, "Expected HTTP 404 for missing key");
-    // NOTE: The SDK surfaces this as code "NotFound" rather than "NoSuchKey"
-    // because our server does not return an S3 XML error body.
-    // Missing functionality: S3-compatible XML error responses.
+    let err = result.unwrap_err();
+    let svc_err = err.as_service_error().expect("expected service error");
+    assert!(
+        svc_err.is_no_such_key(),
+        "Expected NoSuchKey, got: {:?}",
+        svc_err
+    );
 }
 
 // ── GetObject: ETag conditional (If-None-Match) ───────────────────────────────

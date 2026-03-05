@@ -1,6 +1,7 @@
 use crate::etag;
 use crate::multipart_state::UploadEntry;
 use crate::s3_xml_compat::{
+    err_internal, err_invalid_argument, err_invalid_part, err_malformed_xml, err_no_such_upload,
     from_xml_bytes, to_xml_bytes, CompleteMultipartUpload, CompleteMultipartUploadResult,
     InitiateMultipartUploadResult,
 };
@@ -42,10 +43,7 @@ pub async fn post_dispatch(
     } else if let Some(upload_id) = params.upload_id {
         complete_multipart_upload(state, key, upload_id, body).await
     } else {
-        Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
-            .expect("build 400")
+        err_invalid_argument("A valid uploads or uploadId query parameter must be provided.")
     }
 }
 
@@ -71,10 +69,7 @@ async fn create_multipart_upload(state: AppState, key: String) -> Response {
         Ok(b) => b,
         Err(e) => {
             warn!("XML serialise error: {}", e);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .expect("build 500");
+            return err_internal();
         }
     };
 
@@ -98,10 +93,7 @@ async fn complete_multipart_upload(
         Ok(b) => b,
         Err(e) => {
             warn!("Failed to read CompleteMultipartUpload body: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400");
+            return err_malformed_xml();
         }
     };
 
@@ -110,10 +102,7 @@ async fn complete_multipart_upload(
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to parse CompleteMultipartUpload XML: {}", e);
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400");
+            return err_malformed_xml();
         }
     };
 
@@ -122,24 +111,13 @@ async fn complete_multipart_upload(
         let uploads = state.uploads.read().await;
         match uploads.get(&upload_id) {
             Some(e) if e.key == key => {
-                // Clone the parts we need
                 e.parts
                     .iter()
                     .map(|(k, v)| (*k, v.clone()))
                     .collect::<HashMap<u32, _>>()
             }
-            Some(_) => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .expect("build 400 key mismatch");
-            }
-            None => {
-                return Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
-                    .expect("build 404 upload not found");
-            }
+            Some(_) => return err_invalid_argument("The upload ID is not associated with this key."),
+            None => return err_no_such_upload(),
         }
     };
 
@@ -148,18 +126,7 @@ async fn complete_multipart_upload(
     for cp in &request.parts {
         match upload_entry.get(&cp.part_number) {
             Some(pe) if pe.etag == cp.etag => ordered_parts.push((cp.part_number, pe.clone())),
-            Some(_) => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .expect("build 400 etag mismatch");
-            }
-            None => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .expect("build 400 part missing");
-            }
+            Some(_) | None => return err_invalid_part(),
         }
     }
     ordered_parts.sort_by_key(|(n, _)| *n);
@@ -168,12 +135,7 @@ async fn complete_multipart_upload(
     let serve_dir = state.store.read().await.serve_dir().to_owned();
     let rel_path = match crate::handlers::put_object::sanitize_key(&key) {
         Some(p) => p,
-        None => {
-            return Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400 bad key");
-        }
+        None => return err_invalid_argument("The specified object key is invalid."),
     };
     let abs_path = serve_dir.join(&rel_path);
 
@@ -193,10 +155,7 @@ async fn complete_multipart_upload(
         Err(e) => {
             warn!("Failed to assemble parts: {}", e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .expect("build 500");
+            return err_internal();
         }
     };
 
@@ -204,10 +163,7 @@ async fn complete_multipart_upload(
     if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
         warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
         let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .expect("build 500");
+        return err_internal();
     }
 
     // Persist ETag cache
@@ -249,10 +205,7 @@ async fn complete_multipart_upload(
         Ok(b) => b,
         Err(e) => {
             warn!("XML serialise error: {}", e);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .expect("build 500");
+            return err_internal();
         }
     };
 
@@ -309,10 +262,7 @@ pub async fn delete_dispatch(
 ) -> Response {
     match params.upload_id {
         Some(upload_id) => abort_multipart_upload(state, key, upload_id).await,
-        None => Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
-            .expect("build 400"),
+        None => err_invalid_argument("A valid uploadId query parameter must be provided."),
     }
 }
 
@@ -338,16 +288,10 @@ async fn abort_multipart_upload(state: AppState, key: String, upload_id: String)
                 .expect("build 204")
         }
         Some(entry) => {
-            // Key mismatch — re-insert the entry and return 400
+            // Key mismatch — re-insert the entry and return error
             uploads.insert(upload_id, entry);
-            Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .expect("build 400 key mismatch")
+            err_invalid_argument("The upload ID is not associated with this key.")
         }
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::empty())
-            .expect("build 404"),
+        None => err_no_such_upload(),
     }
 }
