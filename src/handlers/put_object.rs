@@ -1,5 +1,7 @@
 use crate::etag;
+use crate::multipart_state::{PartEntry, SharedUploadState};
 use crate::store::{FileEntry, SharedStore};
+use crate::AppState;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -22,20 +24,16 @@ pub struct PutParams {
 
 /// PUT /{*key} — dispatches to PutObject or UploadPart based on query params.
 pub async fn put_dispatch(
-    State(store): State<SharedStore>,
+    State(state): State<AppState>,
     Path(key): Path<String>,
     Query(params): Query<PutParams>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
     if params.part_number.is_some() || params.upload_id.is_some() {
-        // UploadPart — implemented in Stage 4
-        Response::builder()
-            .status(StatusCode::NOT_IMPLEMENTED)
-            .body(Body::empty())
-            .expect("build 501")
+        upload_part(state, key, params, body).await
     } else {
-        put_object(store, key, headers, body).await
+        put_object(state.store, key, headers, body).await
     }
 }
 
@@ -172,6 +170,106 @@ async fn put_object(
         .body(Body::empty())
         .expect("build 200")
 }
+
+/// UploadPart — store a single part for a multipart upload.
+async fn upload_part(
+    state: AppState,
+    key: String,
+    params: PutParams,
+    body: Body,
+) -> Response {
+    let part_number = match params.part_number {
+        Some(n) if (1..=10_000).contains(&n) => n,
+        _ => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .expect("build 400");
+        }
+    };
+    let upload_id = match params.upload_id {
+        Some(id) => id,
+        None => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .expect("build 400");
+        }
+    };
+
+    // Verify the upload exists and targets this key
+    {
+        let uploads = state.uploads.read().await;
+        match uploads.get(&upload_id) {
+            Some(entry) if entry.key == key => {}
+            Some(_) => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::empty())
+                    .expect("build 400 key mismatch");
+            }
+            None => {
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Body::empty())
+                    .expect("build 404 upload not found");
+            }
+        }
+    }
+
+    // Determine temp directory: same serve_dir as the store
+    let serve_dir = state.store.read().await.serve_dir().to_owned();
+    let cache_dir = serve_dir.join(".fxv-etag-cache");
+    let _ = tokio::fs::create_dir_all(&cache_dir).await;
+    let tmp_path = cache_dir.join(format!(
+        "part-{}-{}.fxv_tmp",
+        upload_id,
+        part_number
+    ));
+
+    let write_result = write_body_to_temp(&tmp_path, body).await;
+    let (size, etag, _) = match write_result {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Failed to write part temp file {:?}: {}", tmp_path, e);
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .expect("build 500");
+        }
+    };
+
+    // Store part metadata
+    {
+        let mut uploads = state.uploads.write().await;
+        if let Some(entry) = uploads.get_mut(&upload_id) {
+            // Remove any previous temp file for this part number
+            if let Some(old) = entry.parts.remove(&part_number) {
+                let _ = tokio::fs::remove_file(&old.abs_path).await;
+            }
+            entry.parts.insert(
+                part_number,
+                PartEntry {
+                    abs_path: tmp_path,
+                    size,
+                    etag: etag.clone(),
+                },
+            );
+        }
+    }
+
+    debug!("UploadPart {} part {} → ETag {}", upload_id, part_number, etag);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::ETAG, etag)
+        .body(Body::empty())
+        .expect("build 200")
+}
+
+/// Helper: store upload state shared reference type alias.
+#[allow(dead_code)]
+pub(crate) type Uploads = SharedUploadState;
 
 /// Stream `body` into `tmp_path`, computing BLAKE3 and capturing metadata.
 /// Returns `(file_size, etag, modified_time)`.

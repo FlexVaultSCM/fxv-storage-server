@@ -1,6 +1,6 @@
 use crate::conditional::{self, ConditionalResult};
 use crate::range;
-use crate::store::SharedStore;
+use crate::AppState;
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -12,11 +12,11 @@ use tracing::debug;
 
 /// GET /{*key} — S3 GetObject
 pub async fn get_object(
-    State(store): State<SharedStore>,
+    State(state): State<AppState>,
     Path(key): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let store = store.read().await;
+    let store = state.store.read().await;
     let entry = match store.get(&key) {
         Some(e) => e.clone(),
         None => {

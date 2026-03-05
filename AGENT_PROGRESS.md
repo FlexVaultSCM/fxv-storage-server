@@ -85,9 +85,36 @@ Dev: `reqwest`, `tempfile`, `filetime`
 
 ---
 
+## Stage 4 – Multipart Upload (Complete)
+
+### Files Created/Modified
+- `src/multipart_state.rs` — `SharedUploadState = Arc<RwLock<HashMap<String, UploadEntry>>>`, `PartEntry`, `UploadEntry`; `new_shared_upload_state()`
+- `src/s3_xml_compat.rs` — XML types: `InitiateMultipartUploadResult`, `CompleteMultipartUpload`, `CompletePart`, `CompleteMultipartUploadResult`; `to_xml_bytes()` / `from_xml_bytes()` helpers
+- `src/handlers/multipart.rs` — `create_multipart_upload()`, `complete_multipart_upload()`, `assemble_parts()` 
+- `src/handlers/put_object.rs` — `upload_part()` added to `put_dispatch`
+- `src/lib.rs` — `AppState { store, uploads }` combined state struct replaces bare `SharedStore`; all handlers updated to use `AppState`
+- `tests/multipart.rs` — 5 integration tests
+
+### Key Decisions
+- **`AppState`**: Combined store + upload state passed to all Axum handlers via `State<AppState>`. Clean separation from `SharedStore` and `SharedUploadState`.
+- **Part temp files**: Stored in `<serve_dir>/.fxv-etag-cache/part-<uploadId>-<partNumber>.fxv_tmp` — reuses cache directory, cleaned up on CompleteMultipartUpload.
+- **Reassembly**: `assemble_parts()` reads each part into memory sequentially (no mmap). Acceptable for our use case.
+- **ETag consistency**: BLAKE3 of assembled file = BLAKE3 of direct PutObject with same content — verified by `test_multipart_etag_matches_putobject_etag`.
+- **Part re-upload**: Old temp file for the same part number is deleted when overwritten.
+
+### Test Results
+- 33 unit tests: all pass
+- 22 integration tests (8 GetObject + 9 PutObject + 5 Multipart): all pass
+- `cargo check`: clean
+- `cargo clippy`: clean
+
+### Git Commits
+- `Stage 4: Multipart Upload implementation`
+
+---
+
 ## Pending Stages
 
 | Stage | Feature                     | Status  |
 |-------|-----------------------------|---------|
-| 4     | Multipart Upload            | pending |
 | 5     | AbortMultipartUpload        | pending |

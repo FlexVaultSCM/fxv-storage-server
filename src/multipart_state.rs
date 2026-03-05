@@ -1,0 +1,35 @@
+/// In-memory state for multipart uploads.
+///
+/// Lives only for the duration of the server process; lost on restart.
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Metadata for a single uploaded part.
+#[derive(Debug, Clone)]
+pub struct PartEntry {
+    /// Path to the temp file holding this part's data.
+    pub abs_path: PathBuf,
+    /// Number of bytes in this part.
+    pub size: u64,
+    /// BLAKE3 ETag of this part's data (double-quoted hex string).
+    pub etag: String,
+}
+
+/// State for one in-progress multipart upload.
+#[derive(Debug)]
+pub struct UploadEntry {
+    /// Object key this upload targets.
+    pub key: String,
+    /// Parts uploaded so far, keyed by 1-based part number.
+    pub parts: HashMap<u32, PartEntry>,
+}
+
+/// Shared, async-safe multipart upload state.
+pub type SharedUploadState = Arc<RwLock<HashMap<String, UploadEntry>>>;
+
+/// Construct an empty shared upload state.
+pub fn new_shared_upload_state() -> SharedUploadState {
+    Arc::new(RwLock::new(HashMap::new()))
+}

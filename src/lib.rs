@@ -4,7 +4,9 @@ pub mod conditional;
 pub mod errors;
 pub mod etag;
 pub mod handlers;
+pub mod multipart_state;
 pub mod range;
+pub mod s3_xml_compat;
 pub mod store;
 
 use axum::Router;
@@ -13,11 +15,23 @@ use handlers::{
     multipart::{delete_dispatch, post_dispatch},
     put_object::put_dispatch,
 };
+use multipart_state::{new_shared_upload_state, SharedUploadState};
 use store::SharedStore;
+
+/// Combined application state threaded through all handlers.
+#[derive(Clone)]
+pub struct AppState {
+    pub store: SharedStore,
+    pub uploads: SharedUploadState,
+}
 
 /// Build the Axum application router with the given shared store.
 /// Extracted so integration tests can spin up a server without repeating setup.
 pub fn build_app(store: SharedStore) -> Router {
+    let state = AppState {
+        store,
+        uploads: new_shared_upload_state(),
+    };
     Router::new()
         .route(
             "/{*key}",
@@ -26,6 +40,6 @@ pub fn build_app(store: SharedStore) -> Router {
                 .post(post_dispatch)
                 .delete(delete_dispatch),
         )
-        .with_state(store)
+        .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http())
 }

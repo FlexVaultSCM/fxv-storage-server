@@ -5,8 +5,6 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
