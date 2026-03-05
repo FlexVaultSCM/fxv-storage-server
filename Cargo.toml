@@ -1,0 +1,59 @@
+[package]
+name = "fxv-storage-server"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Hashing
+blake3 = "1"
+
+# Error handling
+error-chain = "0.12.4"
+
+# Note: tracing versions kept in sync explicitly
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tracing-appender = "0.2.4"
+
+# XML serialization for S3-compatible multipart API responses/requests
+quick-xml = { version = "0.37", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+
+# UUID for multipart upload IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Byte utilities
+bytes = "1"
+
+# HTTP date parsing/formatting
+httpdate = "1"
+
+# HTTP primitives (kept in sync with axum's version)
+http = "1"
+
+# Async stream utilities (ReaderStream, etc.)
+tokio-util = { version = "0.7", features = ["io"] }
+
+[dev-dependencies]
+# HTTP client for integration tests
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+# For manipulating file mtimes in tests
+filetime = "0.2"
+
+[lints.rust]
+# error_chain uses a custom cfg that isn't declared via check-cfg; suppress the warning
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(has_error_description_deprecated)'] }
