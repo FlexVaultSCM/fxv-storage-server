@@ -56,6 +56,9 @@ tokio = { version = "1", features = ["full"] }
 tempfile = "3"
 # For manipulating file mtimes in tests
 filetime = "0.2"
+# AWS SDK for S3 compatibility tests
+aws-sdk-s3 = "1"
+aws-config = { version = "1", default-features = false }
 
 [lints.rust]
 # error_chain uses a custom cfg that isn't declared via check-cfg; suppress the warning
