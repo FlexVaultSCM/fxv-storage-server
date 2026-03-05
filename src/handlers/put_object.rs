@@ -1,11 +1,16 @@
-use crate::store::SharedStore;
+use crate::etag;
+use crate::store::{FileEntry, SharedStore};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::Response,
 };
 use serde::Deserialize;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use tokio::io::AsyncWriteExt;
+use tracing::{debug, warn};
 
 #[derive(Debug, Deserialize)]
 pub struct PutParams {
@@ -17,11 +22,11 @@ pub struct PutParams {
 
 /// PUT /{*key} — dispatches to PutObject or UploadPart based on query params.
 pub async fn put_dispatch(
-    State(_store): State<SharedStore>,
-    Path(_key): Path<String>,
+    State(store): State<SharedStore>,
+    Path(key): Path<String>,
     Query(params): Query<PutParams>,
-    _headers: HeaderMap,
-    _body: Body,
+    headers: HeaderMap,
+    body: Body,
 ) -> Response {
     if params.part_number.is_some() || params.upload_id.is_some() {
         // UploadPart — implemented in Stage 4
@@ -30,10 +35,217 @@ pub async fn put_dispatch(
             .body(Body::empty())
             .expect("build 501")
     } else {
-        // PutObject — implemented in Stage 3
-        Response::builder()
-            .status(StatusCode::NOT_IMPLEMENTED)
-            .body(Body::empty())
-            .expect("build 501")
+        put_object(store, key, headers, body).await
     }
 }
+
+/// PutObject — write a single file atomically.
+async fn put_object(
+    store: SharedStore,
+    key: String,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    // Resolve the serve directory from the store
+    let serve_dir = {
+        let s = store.read().await;
+        s.serve_dir().to_owned()
+    };
+
+    // Sanitise the key against path traversal
+    let rel_path = match sanitize_key(&key) {
+        Some(p) => p,
+        None => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .expect("build 400");
+        }
+    };
+
+    let abs_path = serve_dir.join(&rel_path);
+
+    // Evaluate conditional headers against existing file (if any)
+    let if_match = headers
+        .get(header::IF_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+
+    {
+        let s = store.read().await;
+        let existing = s.get(&key);
+        match (existing, if_match.as_deref(), if_none_match.as_deref()) {
+            // If-None-Match: * means "fail if object already exists"
+            (Some(_), _, Some("*")) => {
+                return Response::builder()
+                    .status(StatusCode::PRECONDITION_FAILED)
+                    .body(Body::empty())
+                    .expect("build 412");
+            }
+            // If-Match: must match existing ETag
+            (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
+                return Response::builder()
+                    .status(StatusCode::PRECONDITION_FAILED)
+                    .body(Body::empty())
+                    .expect("build 412");
+            }
+            (Some(_), Some(_), _) => {}
+            // If-Match specified but object does not exist → 412
+            (None, Some(_), _) => {
+                return Response::builder()
+                    .status(StatusCode::PRECONDITION_FAILED)
+                    .body(Body::empty())
+                    .expect("build 412");
+            }
+            _ => {}
+        }
+    }
+
+    // Create parent directories if needed
+    if let Some(parent) = abs_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            warn!("create_dir_all failed for {:?}: {}", parent, e);
+            e
+        }).ok();
+        // If we failed to create dirs, the temp file write below will fail and return 500
+    }
+
+    // Write to a temp file in the same directory (so rename is atomic)
+    let tmp_path = abs_path.with_extension(format!(
+        "{}.fxv_tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
+
+    let write_result = write_body_to_temp(&tmp_path, body).await;
+
+    let (tmp_size, etag, modified) = match write_result {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Failed to write temp file {:?}: {}", tmp_path, e);
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .expect("build 500");
+        }
+    };
+
+    // Atomic rename
+    if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
+        warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .expect("build 500");
+    }
+
+    // Persist ETag to the disk cache
+    let mtime_secs = modified
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &etag).await;
+
+    // Update the in-memory index
+    {
+        let mut s = store.write().await;
+        s.upsert(
+            key.clone(),
+            FileEntry {
+                abs_path: abs_path.clone(),
+                size: tmp_size,
+                modified,
+                etag: etag.clone(),
+            },
+        );
+    }
+
+    debug!("PUT {} → 200 (ETag {})", key, etag);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::ETAG, etag)
+        .body(Body::empty())
+        .expect("build 200")
+}
+
+/// Stream `body` into `tmp_path`, computing BLAKE3 and capturing metadata.
+/// Returns `(file_size, etag, modified_time)`.
+async fn write_body_to_temp(
+    tmp_path: &std::path::Path,
+    body: Body,
+) -> std::io::Result<(u64, String, SystemTime)> {
+    use http_body_util::BodyExt;
+
+    let mut file = tokio::fs::File::create(tmp_path).await?;
+    let mut hasher = blake3::Hasher::new();
+    let mut total_bytes: u64 = 0;
+
+    let mut body = body;
+    while let Some(chunk) = body.frame().await {
+        let frame = chunk.map_err(|e| std::io::Error::other(e.to_string()))?;
+        if let Ok(data) = frame.into_data() {
+            hasher.update(&data);
+            total_bytes += data.len() as u64;
+            file.write_all(&data).await?;
+        }
+    }
+
+    file.flush().await?;
+    drop(file);
+
+    let meta = tokio::fs::metadata(tmp_path).await?;
+    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let etag = etag::etag_from_hash(hasher.finalize());
+
+    Ok((total_bytes, etag, modified))
+}
+
+/// Validate a key string and return a `PathBuf` that is safe to join with the serve directory.
+/// Returns `None` if the key contains path traversal components.
+pub fn sanitize_key(key: &str) -> Option<PathBuf> {
+    use std::path::Component;
+
+    let p = PathBuf::from(key.trim_start_matches('/'));
+    for component in p.components() {
+        match component {
+            Component::Normal(_) => {}
+            _ => return None, // Reject .., /, RootDir, Prefix
+        }
+    }
+    if p.as_os_str().is_empty() {
+        return None;
+    }
+    Some(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_key_valid() {
+        assert!(sanitize_key("a/b/c.txt").is_some());
+        assert!(sanitize_key("file.txt").is_some());
+        assert!(sanitize_key("deep/nested/path/file.bin").is_some());
+    }
+
+    #[test]
+    fn test_sanitize_key_traversal_rejected() {
+        assert!(sanitize_key("../secret").is_none());
+        assert!(sanitize_key("a/../../etc/passwd").is_none());
+        // Leading slash is stripped, so "/absolute" becomes "absolute" which is valid
+        assert!(sanitize_key("/absolute").is_some());
+    }
+
+    #[test]
+    fn test_sanitize_key_empty_rejected() {
+        assert!(sanitize_key("").is_none());
+        assert!(sanitize_key("/").is_none());
+    }
+}
+

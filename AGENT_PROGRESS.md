@@ -55,10 +55,39 @@ Dev: `reqwest`, `tempfile`, `filetime`
 
 ---
 
+## Stage 3 – PutObject (Complete)
+
+### Files Created/Modified
+- `src/handlers/put_object.rs` — Full PutObject handler with:
+  - Atomic write: body → temp file in serve_dir, BLAKE3 computed during streaming, then `rename()`
+  - Conditional headers: `If-None-Match: *` (prevent overwrite), `If-Match: <etag>` (conditional replace)
+  - Path traversal protection via `sanitize_key()`: strips leading `/`, rejects `..` and absolute components
+  - Parent directory creation for nested keys
+  - ETag disk cache update after successful write
+  - In-memory `FileStore` index updated after successful write
+- `src/store.rs` — Added `serve_dir: PathBuf` field to `FileStore`, `serve_dir()` accessor, `upsert()` now public
+- `Cargo.toml` — Added `http-body-util = "0.1"` for `BodyExt::frame()` body streaming
+- `tests/put_object.rs` — 9 integration tests
+
+### Key Decisions
+- **`If-Match: *`** on PutObject: treated as "object must exist, any ETag OK". If file doesn't exist → 412.
+- **Nested key directories**: created with `create_dir_all()` before writing; failure is non-fatal (write will fail and return 500 anyway).
+- **Leading `/` in key**: stripped by `sanitize_key()` before path resolution — matches S3 behavior where `/key` and `key` are equivalent.
+
+### Test Results
+- 33 unit tests: all pass
+- 17 integration tests (8 GetObject + 9 PutObject): all pass
+- `cargo check`: clean
+- `cargo clippy`: clean
+
+### Git Commits
+- `Stage 3: PutObject implementation`
+
+---
+
 ## Pending Stages
 
 | Stage | Feature                     | Status  |
 |-------|-----------------------------|---------|
-| 3     | PutObject                   | pending |
 | 4     | Multipart Upload            | pending |
 | 5     | AbortMultipartUpload        | pending |

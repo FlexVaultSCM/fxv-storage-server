@@ -22,8 +22,10 @@ pub struct FileEntry {
 
 /// In-memory index of files in the serve directory.
 /// Keys are slash-separated paths relative to the serve root (e.g. `"a/b/c.txt"`).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FileStore {
+    /// Canonical path of the serve directory.
+    serve_dir: PathBuf,
     entries: HashMap<String, FileEntry>,
 }
 
@@ -33,7 +35,15 @@ impl FileStore {
         let mut entries = HashMap::new();
         walk_dir(serve_dir, serve_dir, &mut entries).await?;
         info!("FileStore built with {} entries", entries.len());
-        Ok(FileStore { entries })
+        Ok(FileStore {
+            serve_dir: serve_dir.to_owned(),
+            entries,
+        })
+    }
+
+    /// The serve directory this store is rooted at.
+    pub fn serve_dir(&self) -> &Path {
+        &self.serve_dir
     }
 
     /// Look up an entry by its slash-separated key (e.g. `"a/b/c.txt"`).
@@ -42,12 +52,11 @@ impl FileStore {
     }
 
     /// Insert or replace an entry (used after PutObject / CompleteMultipartUpload).
-    #[allow(dead_code)]
     pub fn upsert(&mut self, key: String, entry: FileEntry) {
         self.entries.insert(key, entry);
     }
 
-    /// Remove an entry (if needed in the future).
+    /// Remove an entry.
     #[allow(dead_code)]
     pub fn remove(&mut self, key: &str) {
         self.entries.remove(key);

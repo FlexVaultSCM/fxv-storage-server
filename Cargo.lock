@@ -509,6 +509,7 @@ dependencies = [
  "error-chain",
  "filetime",
  "http",
+ "http-body-util",
  "httpdate",
  "quick-xml",
  "reqwest",

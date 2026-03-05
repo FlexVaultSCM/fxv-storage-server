@@ -37,6 +37,9 @@ uuid = { version = "1", features = ["v4"] }
 # Byte utilities
 bytes = "1"
 
+# HTTP body utilities
+http-body-util = "0.1"
+
 # HTTP date parsing/formatting
 httpdate = "1"
 
