@@ -113,8 +113,27 @@ Dev: `reqwest`, `tempfile`, `filetime`
 
 ---
 
-## Pending Stages
+## Stage 5 – AbortMultipartUpload (Complete)
 
-| Stage | Feature                     | Status  |
-|-------|-----------------------------|---------|
-| 5     | AbortMultipartUpload        | pending |
+### Files Created/Modified
+- `src/handlers/multipart.rs` — `abort_multipart_upload()` and `delete_dispatch()` with `DeleteParams { upload_id }`
+- `tests/abort_multipart.rs` — 4 integration tests
+
+### Key Decisions
+- **Response code**: 204 No Content on success (S3 standard).
+- **Key mismatch**: If uploadId exists but targets a different key → 400.
+- **No uploadId**: DELETE without uploadId → 400.
+- **Cleanup**: All part temp files removed synchronously during abort.
+
+### Test Results
+- 33 unit tests: all pass
+- 26 integration tests (8 GetObject + 9 PutObject + 5 Multipart + 4 AbortMultipart): all pass
+- `cargo check`: clean
+- `cargo clippy`: clean
+
+### Git Commits
+- `Stage 5: AbortMultipartUpload implementation`
+
+---
+
+## All Stages Complete ✓

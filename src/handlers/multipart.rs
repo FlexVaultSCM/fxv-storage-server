@@ -300,16 +300,54 @@ async fn assemble_parts(
     Ok((total, etag, modified))
 }
 
-/// DELETE /{*key} — AbortMultipartUpload (Stage 5).
+/// DELETE /{*key} — AbortMultipartUpload.
 pub async fn delete_dispatch(
     State(state): State<AppState>,
-    Path(_key): Path<String>,
+    Path(key): Path<String>,
+    Query(params): Query<DeleteParams>,
     _headers: HeaderMap,
 ) -> Response {
-    // Stage 5 — abort multipart upload
-    let _ = state;
-    Response::builder()
-        .status(StatusCode::NOT_IMPLEMENTED)
-        .body(Body::empty())
-        .expect("build 501")
+    match params.upload_id {
+        Some(upload_id) => abort_multipart_upload(state, key, upload_id).await,
+        None => Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::empty())
+            .expect("build 400"),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteParams {
+    #[serde(rename = "uploadId")]
+    pub upload_id: Option<String>,
+}
+
+/// AbortMultipartUpload: clean up all temp files and remove upload state.
+async fn abort_multipart_upload(state: AppState, key: String, upload_id: String) -> Response {
+    let mut uploads = state.uploads.write().await;
+    match uploads.remove(&upload_id) {
+        Some(entry) if entry.key == key => {
+            // Clean up part temp files
+            for (_, part) in entry.parts {
+                let _ = tokio::fs::remove_file(&part.abs_path).await;
+            }
+            debug!("AbortMultipartUpload {} → 204", upload_id);
+            Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Body::empty())
+                .expect("build 204")
+        }
+        Some(entry) => {
+            // Key mismatch — re-insert the entry and return 400
+            uploads.insert(upload_id, entry);
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::empty())
+                .expect("build 400 key mismatch")
+        }
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .expect("build 404"),
+    }
 }
