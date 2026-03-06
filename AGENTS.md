@@ -101,7 +101,7 @@ file.
 - **TOCTOU fix**: The conditional check (If-Match / If-None-Match), temp-file rename,
   `save_cached_etag`, and store upsert are all performed under a single write-lock acquisition
   in both `put_object` and `complete_multipart_upload`. An early read-lock check is kept as an
-  optimisation to reject obviously-failing requests before streaming the body, but the write-lock
+  optimization to reject obviously-failing requests before streaming the body, but the write-lock
   re-check is the definitive gate.
 - `save_cached_etag` uses `tokio::fs::write` which is not atomic in isolation. It is safe
   because **all runtime call-sites hold the FileStore write lock** for the duration. The
@@ -225,8 +225,8 @@ full multipart flow, AbortMultipartUpload.
 | `tracing` | 0.1.41 | Instrumentation |
 | `tracing-subscriber` | 0.3.20 | Log subscriber |
 | `tracing-appender` | 0.2.4 | Log appending |
-| `quick-xml` | 0.37 (serialize) | S3 XML serialisation |
-| `serde` | 1 (derive) | Serialisation derive macros |
+| `quick-xml` | 0.37 (serialize) | S3 XML serialization |
+| `serde` | 1 (derive) | Serialization derive macros |
 | `uuid` | 1 (v4) | Upload IDs, temp file names |
 | `bytes` | 1 | Byte buffer utilities |
 | `http-body-util` | 0.1 | Body streaming (`BodyExt::frame()`) |

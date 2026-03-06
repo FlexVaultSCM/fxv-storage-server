@@ -133,7 +133,7 @@ pub struct CompleteMultipartUploadResult {
     pub etag: String,
 }
 
-// == XML serialisation helpers
+// == XML serialization helpers
 
 /// Serialise a value to an XML byte string with an `<?xml ...?>` declaration.
 pub fn to_xml_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, quick_xml::se::SeError> {

@@ -67,7 +67,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         .map(str::to_owned);
 
     // Early conditional check under read lock: reject obviously-failing requests
-    // before streaming the body.  This is a best-effort optimisation only - the
+    // before streaming the body.  This is a best-effort optimization only - the
     // definitive check happens again under the write lock below to close the TOCTOU
     // window between body receipt and store update.
     {
