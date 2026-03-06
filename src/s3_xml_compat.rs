@@ -2,6 +2,9 @@
 ///
 /// These structs are serialised/deserialised with `quick-xml` + `serde`.
 /// Only the fields needed for our implementation are included.
+///
+/// S3 XML error response format:
+/// <https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html>
 use axum::{body::Body, http::StatusCode, response::Response};
 use serde::{Deserialize, Serialize};
 
@@ -81,6 +84,9 @@ pub fn err_internal() -> Response {
 
 // ── CreateMultipartUpload response ──────────────────────────────────────────
 
+/// Response body for the CreateMultipartUpload operation.
+///
+/// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateMultipartUpload.html>
 #[derive(Debug, Serialize)]
 #[serde(rename = "InitiateMultipartUploadResult")]
 pub struct InitiateMultipartUploadResult {
@@ -92,6 +98,9 @@ pub struct InitiateMultipartUploadResult {
 
 // ── CompleteMultipartUpload request ─────────────────────────────────────────
 
+/// Request body for the CompleteMultipartUpload operation.
+///
+/// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html>
 #[derive(Debug, Deserialize)]
 #[serde(rename = "CompleteMultipartUpload")]
 pub struct CompleteMultipartUpload {
@@ -99,6 +108,9 @@ pub struct CompleteMultipartUpload {
     pub parts: Vec<CompletePart>,
 }
 
+/// A single part entry within a [`CompleteMultipartUpload`] request body.
+///
+/// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompletedPart.html>
 #[derive(Debug, Deserialize)]
 pub struct CompletePart {
     #[serde(rename = "PartNumber")]
@@ -109,6 +121,9 @@ pub struct CompletePart {
 
 // ── CompleteMultipartUpload response ────────────────────────────────────────
 
+/// Response body for the CompleteMultipartUpload operation.
+///
+/// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html>
 #[derive(Debug, Serialize)]
 #[serde(rename = "CompleteMultipartUploadResult")]
 pub struct CompleteMultipartUploadResult {
