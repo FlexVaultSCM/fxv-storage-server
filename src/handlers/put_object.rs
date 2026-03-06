@@ -59,7 +59,7 @@ async fn put_object(
 
     let abs_path = serve_dir.join(&rel_path);
 
-    // Evaluate conditional headers against existing file (if any)
+    // Parse conditional headers.
     let if_match = headers
         .get(header::IF_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -69,18 +69,19 @@ async fn put_object(
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
 
+    // Early conditional check under read lock: reject obviously-failing requests
+    // before streaming the body.  This is a best-effort optimisation only — the
+    // definitive check happens again under the write lock below to close the TOCTOU
+    // window between body receipt and store update.
     {
         let s = store.read().await;
         let existing = s.get(&key);
         match (existing, if_match.as_deref(), if_none_match.as_deref()) {
-            // If-None-Match: * means "fail if object already exists"
             (Some(_), _, Some("*")) => return err_precondition_failed(),
-            // If-Match: must match existing ETag
             (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
                 return err_precondition_failed();
             }
             (Some(_), Some(_), _) => {}
-            // If-Match specified but object does not exist → 412
             (None, Some(_), _) => return err_precondition_failed(),
             _ => {}
         }
@@ -112,23 +113,54 @@ async fn put_object(
         }
     };
 
-    // Atomic rename
-    if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
-        warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return err_internal();
-    }
-
-    // Persist ETag to the disk cache
     let mtime_secs = modified
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &etag).await;
 
-    // Update the in-memory index
+    // Acquire the write lock and perform the conditional re-check, rename, cache
+    // write, and store upsert as a single atomic unit.
+    //
+    // Re-checking under the write lock closes the TOCTOU window: no other writer
+    // can modify the store entry between this check and the upsert.
+    //
+    // save_cached_etag is called while holding the write lock, which serialises
+    // all cache file writes — making the non-atomic tokio::fs::write safe.
     {
         let mut s = store.write().await;
+
+        // Definitive conditional check — the store entry may have changed since
+        // the early check above.
+        let existing = s.get(&key);
+        match (existing, if_match.as_deref(), if_none_match.as_deref()) {
+            (Some(_), _, Some("*")) => {
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                return err_precondition_failed();
+            }
+            (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                return err_precondition_failed();
+            }
+            (None, Some(_), _) => {
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                return err_precondition_failed();
+            }
+            _ => {}
+        }
+
+        // Atomic rename onto the final path (fast: same-filesystem inode update).
+        if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
+            warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return err_internal();
+        }
+
+        // Persist ETag to the disk cache.  Safe to use tokio::fs::write here
+        // because we are the only writer: the write lock is held for the
+        // duration and all runtime call-sites of save_cached_etag hold it.
+        etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &etag).await;
+
+        // Update the in-memory index.
         s.upsert(
             key.clone(),
             FileEntry {

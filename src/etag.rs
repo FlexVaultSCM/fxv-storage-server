@@ -56,6 +56,15 @@ pub async fn load_cached_etag(
 }
 
 /// Persist an ETag to the cache for later reuse.
+///
+/// # Concurrency invariant
+///
+/// This function uses `tokio::fs::write` which is not atomic by itself.  It is
+/// safe only when the caller holds the `FileStore` write lock for the entire
+/// call, which serialises all runtime writers.  Both `put_object` and
+/// `complete_multipart_upload` uphold this invariant.  The only other call-site
+/// is `get_or_compute_etag`, which is used exclusively during startup
+/// (`FileStore::build`) before any request is served.
 pub async fn save_cached_etag(
     serve_dir: &Path,
     rel_path: &Path,

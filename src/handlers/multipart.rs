@@ -159,23 +159,25 @@ async fn complete_multipart_upload(
         }
     };
 
-    // Atomic rename
-    if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
-        warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return err_internal();
-    }
-
-    // Persist ETag cache
     let mtime_secs = modified
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &final_etag).await;
 
-    // Update store
+    // Acquire the write lock: rename, save ETag cache, and upsert store as a
+    // single atomic unit.  Holding the write lock for save_cached_etag serialises
+    // all runtime cache file writes (see invariant note in put_object.rs).
     {
         let mut s = state.store.write().await;
+
+        if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
+            warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return err_internal();
+        }
+
+        etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &final_etag).await;
+
         s.upsert(
             key.clone(),
             FileEntry {
