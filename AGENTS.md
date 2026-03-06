@@ -1,4 +1,4 @@
-# AGENTS.md — fxv-storage-server
+# AGENTS.md - fxv-storage-server
 
 Reference document for AI agents working on this codebase.
 Keep this file up to date when making significant changes.
@@ -9,7 +9,7 @@ Keep this file up to date when making significant changes.
 
 **fxv-storage-server** (FlexVault Storage Server) is a production-aimed async Rust HTTP server
 implementing a small, deliberate subset of the Amazon S3 API. It serves and accepts uploads of
-files from a local directory. It is intentionally minimal — no ListObjects, no ACLs, no versioning,
+files from a local directory. It is intentionally minimal - no ListObjects, no ACLs, no versioning,
 no bucket management.
 
 - **License**: MIT
@@ -40,35 +40,35 @@ DeleteObject, GetBucketLocation, versioning, ACLs, presigned URLs, CORS, lifecyc
 
 ```
 src/
-  main.rs              — CLI (clap), TcpListener with TCP_NODELAY, axum::serve
-  lib.rs               — AppState, build_app(), exports all modules
-  config.rs            — Config struct (serve_dir, port)
-  errors.rs            — error_chain! error types
-  store.rs             — FileStore: HashMap<key, FileEntry>, SharedStore = Arc<RwLock<FileStore>>
-  etag.rs              — BLAKE3 ETag computation; .fxv-etag-cache/ disk cache
-  conditional.rs       — RFC 7232 If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since
-  range.rs             — Range header parsing, ByteRange, content_range_header()
-  s3_xml_compat.rs     — quick-xml+serde types for multipart XML; S3 error response helpers
-  multipart_state.rs   — SharedUploadState = Arc<RwLock<HashMap<uploadId, UploadEntry>>>
+  main.rs              - CLI (clap), TcpListener with TCP_NODELAY, axum::serve
+  lib.rs               - AppState, build_app(), exports all modules
+  config.rs            - Config struct (serve_dir, port)
+  errors.rs            - error_chain! error types
+  store.rs             - FileStore: HashMap<key, FileEntry>, SharedStore = Arc<RwLock<FileStore>>
+  etag.rs              - BLAKE3 ETag computation; .fxv-etag-cache/ disk cache
+  conditional.rs       - RFC 7232 If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since
+  range.rs             - Range header parsing, ByteRange, content_range_header()
+  s3_xml_compat.rs     - quick-xml+serde types for multipart XML; S3 error response helpers
+  multipart_state.rs   - SharedUploadState = Arc<RwLock<HashMap<uploadId, UploadEntry>>>
   handlers/
-    get_object.rs      — GetObject: 200, 206, 304, 412, 416
-    put_object.rs      — PutObject + UploadPart dispatch; sanitize_key()
-    multipart.rs       — CreateMultipartUpload, CompleteMultipartUpload, AbortMultipartUpload
+    get_object.rs      - GetObject: 200, 206, 304, 412, 416
+    put_object.rs      - PutObject + UploadPart dispatch; sanitize_key()
+    multipart.rs       - CreateMultipartUpload, CompleteMultipartUpload, AbortMultipartUpload
 tests/
-  get_object.rs        — 8 integration tests
-  put_object.rs        — 9 integration tests
-  multipart.rs         — 5 integration tests
-  abort_multipart.rs   — 4 integration tests
-  s3_compat.rs         — 7 integration tests using the aws-sdk-s3 client
+  get_object.rs        - 8 integration tests
+  put_object.rs        - 9 integration tests
+  multipart.rs         - 5 integration tests
+  abort_multipart.rs   - 4 integration tests
+  s3_compat.rs         - 7 integration tests using the aws-sdk-s3 client
 test_scripts/
-  rclone_test.py       — Python integration test using rclone as an S3 client (see below)
+  rclone_test.py       - Python integration test using rclone as an S3 client (see below)
 ```
 
 ### Routing
 
 Single Axum wildcard route: `/{*key}`, dispatched by HTTP method.
 Query parameters further dispatch within PUT (`partNumber`/`uploadId`) and POST (`uploads`/`uploadId`).
-There is no bucket concept — the bucket name in the S3 URL is absorbed into the key.
+There is no bucket concept - the bucket name in the S3 URL is absorbed into the key.
 
 ### AppState
 
@@ -82,16 +82,16 @@ pub struct AppState {
 ### ETag Strategy
 
 - BLAKE3 hash of file content, hex-encoded, double-quoted wire format: `"<64 hex chars>"`
-- Computed during upload (streaming) — no post-write re-read needed
+- Computed during upload (streaming) - no post-write re-read needed
 - Cached to disk at `<serve_dir>/.fxv-etag-cache/<rel/path/to/file>` as `"<mtime_secs> <etag>"`
 - Cache is mtime-invalidated: if file mtime changes, ETag is recomputed
 - **Not MD5**: rclone and AWS clients only treat ETags as MD5 when they are exactly 32 hex chars;
-  64-char BLAKE3 ETags are treated as opaque identifiers — no checksum comparison is attempted
+  64-char BLAKE3 ETags are treated as opaque identifiers - no checksum comparison is attempted
 
 ### Atomic Writes
 
 PutObject and CompleteMultipartUpload both write to a UUID-named temp file in the same directory
-as the target, then `rename()` into place. On POSIX this is atomic — readers never see a partial
+as the target, then `rename()` into place. On POSIX this is atomic - readers never see a partial
 file.
 
 ### Concurrency Model
@@ -106,7 +106,7 @@ file.
 - `save_cached_etag` uses `tokio::fs::write` which is not atomic in isolation. It is safe
   because **all runtime call-sites hold the FileStore write lock** for the duration. The
   `get_or_compute_etag` call-site (used only during `FileStore::build` at startup) runs before
-  any requests are served. File-level locking is not needed — this is a single-process design.
+  any requests are served. File-level locking is not needed - this is a single-process design.
 - Multipart upload state (`SharedUploadState`) has its own independent `RwLock`.
 
 ### TCP_NODELAY
@@ -123,7 +123,7 @@ file.
 | ETag hash | BLAKE3 (not MD5) | Speed; S3 clients treat 64-char ETags as opaque |
 | Multipart ETag | BLAKE3 of assembled file | Consistency with PutObject |
 | `tower-http::ServeDir` | Rejected | No ETag support; incompatible with conditional header requirements |
-| Multipart state persistence | None (in-memory only) | Lost on restart — acceptable for our use case |
+| Multipart state persistence | None (in-memory only) | Lost on restart - acceptable for our use case |
 | Part temp storage | `<serve_dir>/.fxv-etag-cache/part-<id>-<n>.fxv_tmp` | Co-located with ETag cache |
 | Content-Type | Always `application/octet-stream` | No MIME detection needed |
 | Bucket concept | None | Bucket name is absorbed into the key path |
@@ -164,7 +164,7 @@ The `--s3-provider Minio` flag is used to enable path-style addressing, matching
 `/{*key}` wildcard routing.
 
 **Inline connection string gotcha**: The form `:s3,endpoint=http://127.0.0.1:PORT:bucket/key`
-is broken — rclone's parser treats `:` in `http://` as a path separator, routing to host `"http"`
+is broken - rclone's parser treats `:` in `http://` as a path separator, routing to host `"http"`
 (10-second DNS timeout). Always use `--s3-endpoint http://...` as a CLI flag with `:s3:bucket/key`
 as the remote path.
 
@@ -181,13 +181,16 @@ full multipart flow, AbortMultipartUpload.
 ## Development Rules
 
 ### Language
-Prefer American English spelling in code, comments and documentation, e.g. "initialize",
+- Prefer American English spelling in code, comments and documentation, e.g. "initialize",
 "optimized", "behavior", "canceled", etc.
+- Avoid using non-ASCII characters in code and comments like em and en dashes, curly quotes,
+ellipses, etc. Emojis are permitted in documentation and comments sparingly if they add clarity
+or emphasis.
 
 ### Rust
 
 - Use the **nightly** toolchain (pinned via `rust-toolchain.toml`).
-- Keep code idiomatic Rust — prefer `?` for error propagation, avoid unnecessary clones.
+- Keep code idiomatic Rust - prefer `?` for error propagation, avoid unnecessary clones.
 - Use `.expect("short message")` for logic invariant violations (coder mistakes). Prefer over
   bare `.unwrap()`.
 - For fallible operations that are part of normal control flow, use `Result`/`error_chain`.
@@ -201,9 +204,9 @@ Prefer American English spelling in code, comments and documentation, e.g. "init
 
 ### Code Quality (enforce before every commit)
 
-- **`cargo fmt`** — code must be formatted; run `cargo fmt` and commit any changes.
-- **`cargo clippy -- -D warnings`** — must produce zero warnings or errors.
-- **`cargo test`** — all tests must pass.
+- **`cargo fmt`** - code must be formatted; run `cargo fmt` and commit any changes.
+- **`cargo clippy -- -D warnings`** - must produce zero warnings or errors.
+- **`cargo test`** - all tests must pass.
 
 ### Git
 
