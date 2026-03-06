@@ -73,7 +73,7 @@ async fn create_multipart_upload(state: AppState, key: String) -> Response {
         }
     };
 
-    debug!("CreateMultipartUpload → uploadId {}", upload_id);
+    debug!("CreateMultipartUpload -> uploadId {}", upload_id);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/xml")
@@ -216,7 +216,7 @@ async fn complete_multipart_upload(
         }
     };
 
-    debug!("CompleteMultipartUpload {} → ETag {}", key, final_etag);
+    debug!("CompleteMultipartUpload {} -> ETag {}", key, final_etag);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/xml")
@@ -288,7 +288,7 @@ async fn abort_multipart_upload(state: AppState, key: String, upload_id: String)
             for (_, part) in entry.parts {
                 let _ = tokio::fs::remove_file(&part.abs_path).await;
             }
-            debug!("AbortMultipartUpload {} → 204", upload_id);
+            debug!("AbortMultipartUpload {} -> 204", upload_id);
             Response::builder()
                 .status(StatusCode::NO_CONTENT)
                 .body(Body::empty())

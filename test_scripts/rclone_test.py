@@ -24,8 +24,8 @@ Notes on rclone S3 compatibility:
     because rclone's parser treats the ":" in "http://" as a path separator.
 
   Two flags are required:
-  - --s3-no-check-bucket: without it rclone calls HeadBucket (→ 404) and then
-    CreateBucket (PUT /bucket-name → 500), because the server has no bucket
+  - --s3-no-check-bucket: without it rclone calls HeadBucket (-> 404) and then
+    CreateBucket (PUT /bucket-name -> 500), because the server has no bucket
     concept; rclone retries indefinitely and hangs.
   - --no-traverse: without it rclone calls ListObjectsV2 before read operations
     (e.g. `rclone cat`); our server returns 404 for listing which rclone treats
@@ -64,11 +64,11 @@ BUCKET = "test-bucket"
 
 # Applied to every rclone invocation.
 # Both flags are required:
-#   --s3-no-check-bucket: without it rclone calls HeadBucket (→ 404) then
-#     CreateBucket (PUT /bucket-name → 500), retrying indefinitely.
+#   --s3-no-check-bucket: without it rclone calls HeadBucket (-> 404) then
+#     CreateBucket (PUT /bucket-name -> 500), retrying indefinitely.
 #   --no-traverse: without it rclone calls ListObjectsV2 before read
 #     operations (e.g. `rclone cat`); our server returns 404 for listing
-#     which rclone treats as "directory not found" → error.
+#     which rclone treats as "directory not found" -> error.
 #     Note: for upload-only commands (copyto, copy) a 404 from ListObjectsV2
 #     is treated as an empty destination and uploads proceed fine regardless.
 _BASE_FLAGS = [
@@ -298,13 +298,13 @@ def _t_dir_upload(rc: RcloneRunner, up: pathlib.Path, dl: pathlib.Path) -> None:
 def _t_multipart(rc: RcloneRunner, up: pathlib.Path, dl: pathlib.Path) -> None:
     """
     Upload an 8 MiB file with a 5 MiB cutoff, forcing rclone to use
-    CreateMultipartUpload → UploadPart × 2 → CompleteMultipartUpload.
+    CreateMultipartUpload -> UploadPart x 2 -> CompleteMultipartUpload.
     """
     src = up / "large.bin"
     src.write_bytes(os.urandom(8 * 1024 * 1024))
     rc(
         "copyto", str(src), rc.rpath("large.bin"),
-        "--s3-upload-cutoff=5242880",  # 5 MiB → triggers multipart for 8 MiB file
+        "--s3-upload-cutoff=5242880",  # 5 MiB -> triggers multipart for 8 MiB file
         "--s3-chunk-size=5242880",     # 5 MiB parts (rclone enforced minimum)
     )
     dst = dl / "large.bin"

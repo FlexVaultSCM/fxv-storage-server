@@ -95,7 +95,7 @@ async fn s3_put_object_and_get_object() {
 
 // == GetObject: 404 for missing key
 
-/// The server now returns S3-format XML error bodies, so the SDK maps 404 → NoSuchKey.
+/// The server now returns S3-format XML error bodies, so the SDK maps 404 -> NoSuchKey.
 #[tokio::test]
 async fn s3_get_object_not_found() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -138,7 +138,7 @@ async fn s3_get_object_if_none_match_304() {
         .expect("PutObject");
     let etag = put.e_tag().expect("etag").to_owned();
 
-    // GET with matching If-None-Match → SDK should surface a NotModified error
+    // GET with matching If-None-Match -> SDK should surface a NotModified error
     let result = client
         .get_object()
         .bucket(BUCKET)

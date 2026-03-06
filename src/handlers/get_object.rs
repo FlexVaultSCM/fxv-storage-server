@@ -97,7 +97,7 @@ pub async fn get_object(
     match byte_range {
         None => {
             // Full response
-            debug!("GET {} → 200 ({} bytes)", key, entry.size);
+            debug!("GET {} -> 200 ({} bytes)", key, entry.size);
             let stream = tokio_util::io::ReaderStream::new(file);
             Response::builder()
                 .status(StatusCode::OK)
@@ -112,7 +112,7 @@ pub async fn get_object(
         Some(range) => {
             // Partial response
             debug!(
-                "GET {} → 206 (bytes {}-{}/{})",
+                "GET {} -> 206 (bytes {}-{}/{})",
                 key, range.start, range.end, entry.size
             );
             if file

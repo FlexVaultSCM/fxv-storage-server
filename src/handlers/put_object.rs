@@ -169,7 +169,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         );
     }
 
-    debug!("PUT {} → 200 (ETag {})", key, etag);
+    debug!("PUT {} -> 200 (ETag {})", key, etag);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::ETAG, etag)
@@ -236,7 +236,7 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
     }
 
     debug!(
-        "UploadPart {} part {} → ETag {}",
+        "UploadPart {} part {} -> ETag {}",
         upload_id, part_number, etag
     );
     Response::builder()

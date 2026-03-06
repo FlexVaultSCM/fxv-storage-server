@@ -126,7 +126,7 @@ async fn test_if_none_match_304() {
         .unwrap()
         .to_owned();
 
-    // Second request with the ETag → 304
+    // Second request with the ETag -> 304
     let resp2 = client
         .get(format!("{}/cached.txt", base))
         .header("If-None-Match", &etag)

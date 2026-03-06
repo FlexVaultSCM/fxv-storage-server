@@ -1,7 +1,7 @@
 /// Integration tests for Multipart Upload (Stage 4).
 ///
 /// Spins up a full fxv-storage-server instance and tests the full
-/// CreateMultipartUpload → UploadPart × N → CompleteMultipartUpload flow.
+/// CreateMultipartUpload -> UploadPart x N -> CompleteMultipartUpload flow.
 use std::net::SocketAddr;
 use std::path::PathBuf;
 

@@ -127,10 +127,10 @@ file.
 | Part temp storage | `<serve_dir>/.fxv-etag-cache/part-<id>-<n>.fxv_tmp` | Co-located with ETag cache |
 | Content-Type | Always `application/octet-stream` | No MIME detection needed |
 | Bucket concept | None | Bucket name is absorbed into the key path |
-| `If-Match: *` on PutObject | "object must exist, any ETag OK" → 412 if missing | Matches S3 behaviour |
+| `If-Match: *` on PutObject | "object must exist, any ETag OK" -> 412 if missing | Matches S3 behaviour |
 | Leading `/` in key | Stripped by `sanitize_key()` | S3 treats `/key` and `key` as equivalent |
 | XML library | `quick-xml` + `serde` | Lightweight; only a few types needed |
-| Error responses | S3-compatible XML `<Error><Code>…</Code><Message>…</Message></Error>` | Required for S3 client compat |
+| Error responses | S3-compatible XML `<Error><Code>...</Code><Message>...</Message></Error>` | Required for S3 client compat |
 
 ---
 
@@ -149,7 +149,7 @@ Two flags are required for rclone to work with this server:
 
 | Flag | Reason |
 |---|---|
-| `--s3-no-check-bucket` | Without it rclone calls `HeadBucket` (→ 404) then `CreateBucket` (→ 500 or loop), because the server has no bucket concept |
+| `--s3-no-check-bucket` | Without it rclone calls `HeadBucket` (-> 404) then `CreateBucket` (-> 500 or loop), because the server has no bucket concept |
 | `--no-traverse` | Without it rclone calls `ListObjectsV2` before read operations (e.g. `rclone cat`); server returns 404 which rclone treats as "directory not found" |
 
 Flags confirmed **not** required (and therefore absent from the script):

@@ -4,11 +4,11 @@
 //! (304 Not Modified, 412 Precondition Failed), or `None` if the request
 //! should proceed normally.
 //!
-//! S3 evaluation order per RFC 7232 §6:
-//! 1. If-Match               → 412 on mismatch
-//! 2. If-Unmodified-Since    → 412 on modified (only if If-Match absent)
-//! 3. If-None-Match          → 304 on match
-//! 4. If-Modified-Since      → 304 on unmodified (only if If-None-Match absent)
+//! S3 evaluation order per RFC 7232 s.6:
+//! 1. If-Match               -> 412 on mismatch
+//! 2. If-Unmodified-Since    -> 412 on modified (only if If-Match absent)
+//! 3. If-None-Match          -> 304 on match
+//! 4. If-Modified-Since      -> 304 on unmodified (only if If-None-Match absent)
 
 use http::StatusCode;
 use std::time::SystemTime;
@@ -56,7 +56,7 @@ pub fn evaluate(
         if !etag_matches(etag, im) {
             return ConditionalResult::PreconditionFailed;
         }
-        // If-Match matched → If-Unmodified-Since is ignored (S3 / RFC 7232 §6.2)
+        // If-Match matched -> If-Unmodified-Since is ignored (S3 / RFC 7232 s.6.2)
         // proceed to step 3
     } else {
         // Step 2: If-Unmodified-Since (only when If-Match is absent)
@@ -74,7 +74,7 @@ pub fn evaluate(
         if etag_matches(etag, inm) {
             return ConditionalResult::NotModified;
         }
-        // If-None-Match did not match → If-Modified-Since is ignored (RFC 7232 §6.3)
+        // If-None-Match did not match -> If-Modified-Since is ignored (RFC 7232 s.6.3)
     } else {
         // Step 4: If-Modified-Since (only when If-None-Match is absent)
         if let Some(ims) = if_modified_since {
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_if_modified_since_not_modified() {
-        // modified == since → not modified
+        // modified == since -> not modified
         assert_eq!(
             evaluate(ETAG, ts(1000), None, None, Some(ts(1000)), None),
             ConditionalResult::NotModified
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_if_modified_since_modified() {
-        // modified > since → modified
+        // modified > since -> modified
         assert_eq!(
             evaluate(ETAG, ts(2000), None, None, Some(ts(1000)), None),
             ConditionalResult::Proceed
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_if_unmodified_since_passes() {
-        // modified <= since → precondition passes
+        // modified <= since -> precondition passes
         assert_eq!(
             evaluate(ETAG, ts(1000), None, None, None, Some(ts(2000))),
             ConditionalResult::Proceed
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_if_unmodified_since_fails() {
-        // modified > since → precondition failed
+        // modified > since -> precondition failed
         assert_eq!(
             evaluate(ETAG, ts(2000), None, None, None, Some(ts(1000))),
             ConditionalResult::PreconditionFailed
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_if_none_match_overrides_if_modified_since() {
-        // If-None-Match matches → 304, even though If-Modified-Since would say modified
+        // If-None-Match matches -> 304, even though If-Modified-Since would say modified
         assert_eq!(
             evaluate(ETAG, ts(2000), None, Some(ETAG), Some(ts(1000)), None),
             ConditionalResult::NotModified
