@@ -30,7 +30,7 @@ pub struct PostParams {
     pub upload_id: Option<String>,
 }
 
-/// POST /{*key} — dispatches to CreateMultipartUpload or CompleteMultipartUpload.
+/// POST /{*key} - dispatches to CreateMultipartUpload or CompleteMultipartUpload.
 pub async fn post_dispatch(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -260,7 +260,7 @@ async fn assemble_parts(
     Ok((total, etag, modified))
 }
 
-/// DELETE /{*key} — AbortMultipartUpload.
+/// DELETE /{*key} - AbortMultipartUpload.
 pub async fn delete_dispatch(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -295,7 +295,7 @@ async fn abort_multipart_upload(state: AppState, key: String, upload_id: String)
                 .expect("build 204")
         }
         Some(entry) => {
-            // Key mismatch — re-insert the entry and return error
+            // Key mismatch - re-insert the entry and return error
             uploads.insert(upload_id, entry);
             err_invalid_argument("The upload ID is not associated with this key.")
         }

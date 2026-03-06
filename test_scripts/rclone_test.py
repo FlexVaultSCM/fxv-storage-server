@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-rclone_test.py — Integration tests for fxv-storage-server using rclone.
+rclone_test.py - Integration tests for fxv-storage-server using rclone.
 
 Spins up a local fxv-storage-server instance, generates test files, and
 exercises the server through rclone's S3 backend, verifying PutObject,
@@ -352,7 +352,7 @@ def main() -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    print(f"Server PID {server.pid} — waiting for ready...")
+    print(f"Server PID {server.pid} - waiting for ready...")
 
     try:
         wait_for_server(args.port)
@@ -364,7 +364,7 @@ def main() -> None:
         print()
         print("=" * 60)
         if _failures:
-            print(f"  FAILED — {len(_failures)}/{total} test(s) failed:")
+            print(f"  FAILED - {len(_failures)}/{total} test(s) failed:")
             for name in _failures:
                 print(f"    - {name}")
             print("=" * 60)

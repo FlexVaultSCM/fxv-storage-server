@@ -80,7 +80,7 @@ async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEnt
             {
                 continue;
             }
-            // Recurse — Box the future to avoid infinite-size type
+            // Recurse - Box the future to avoid infinite-size type
             walk_dir_boxed(rel_base, &path, map).await?;
         } else if file_type.is_file() {
             let rel_path = path.strip_prefix(rel_base)?;

@@ -11,7 +11,7 @@ use aws_sdk_s3::Client;
 ///
 /// Our server exposes a single `/{*key}` wildcard, so "BUCKET/key" is
 /// captured as the key and the file lands at `<serve_dir>/BUCKET/key`.
-/// That is intentional — this test validates wire-level compatibility,
+/// That is intentional - this test validates wire-level compatibility,
 /// not bucket semantics.
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;

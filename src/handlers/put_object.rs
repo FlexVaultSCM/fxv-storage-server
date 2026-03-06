@@ -25,7 +25,7 @@ pub struct PutParams {
     pub upload_id: Option<String>,
 }
 
-/// PUT /{*key} — dispatches to PutObject or UploadPart based on query params.
+/// PUT /{*key} - dispatches to PutObject or UploadPart based on query params.
 pub async fn put_dispatch(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -40,7 +40,7 @@ pub async fn put_dispatch(
     }
 }
 
-/// PutObject — write a single file atomically.
+/// PutObject - write a single file atomically.
 async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: Body) -> Response {
     // Resolve the serve directory from the store
     let serve_dir = {
@@ -67,7 +67,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         .map(str::to_owned);
 
     // Early conditional check under read lock: reject obviously-failing requests
-    // before streaming the body.  This is a best-effort optimisation only — the
+    // before streaming the body.  This is a best-effort optimisation only - the
     // definitive check happens again under the write lock below to close the TOCTOU
     // window between body receipt and store update.
     {
@@ -122,11 +122,11 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
     // can modify the store entry between this check and the upsert.
     //
     // save_cached_etag is called while holding the write lock, which serialises
-    // all cache file writes — making the non-atomic tokio::fs::write safe.
+    // all cache file writes - making the non-atomic tokio::fs::write safe.
     {
         let mut s = store.write().await;
 
-        // Definitive conditional check — the store entry may have changed since
+        // Definitive conditional check - the store entry may have changed since
         // the early check above.
         let existing = s.get(&key);
         match (existing, if_match.as_deref(), if_none_match.as_deref()) {
@@ -177,7 +177,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         .expect("build 200")
 }
 
-/// UploadPart — store a single part for a multipart upload.
+/// UploadPart - store a single part for a multipart upload.
 async fn upload_part(state: AppState, key: String, params: PutParams, body: Body) -> Response {
     let part_number = match params.part_number {
         Some(n) if (1..=10_000).contains(&n) => n,

@@ -13,7 +13,7 @@ use axum::{
 use tokio::io::AsyncSeekExt;
 use tracing::debug;
 
-/// GET /{*key} — S3 GetObject
+/// GET /{*key} - S3 GetObject
 pub async fn get_object(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -74,7 +74,7 @@ pub async fn get_object(
     let byte_range = match range::parse_range(range_header.as_deref(), entry.size) {
         Ok(r) => r,
         Err(_) => {
-            // 416 Range Not Satisfiable — include Content-Range: bytes */size per RFC 7233
+            // 416 Range Not Satisfiable - include Content-Range: bytes */size per RFC 7233
             let mut resp = err_invalid_range();
             resp.headers_mut().insert(
                 header::CONTENT_RANGE,

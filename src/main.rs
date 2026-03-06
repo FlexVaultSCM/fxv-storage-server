@@ -8,7 +8,7 @@ use tracing::info;
 #[derive(Debug, Parser)]
 #[command(
     name = "fxv-storage-server",
-    about = "FlexVault Storage Server — S3-compatible file server"
+    about = "FlexVault Storage Server - S3-compatible file server"
 )]
 struct Cli {
     /// Directory to serve files from (and upload files to).

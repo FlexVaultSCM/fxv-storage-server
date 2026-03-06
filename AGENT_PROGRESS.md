@@ -7,10 +7,10 @@ Tracks decisions made and changes applied so work can be resumed from any checkp
 ## Stage 1 – API Research & Planning (Complete)
 
 ### Key Decisions
-- **ETag format**: BLAKE3 (hex, double-quoted wire format). Intentional deviation from S3's MD5 — clients must not treat ETags as MD5.
+- **ETag format**: BLAKE3 (hex, double-quoted wire format). Intentional deviation from S3's MD5 - clients must not treat ETags as MD5.
 - **Multipart ETag**: BLAKE3 of the fully assembled file (same as single-part PutObject). Not S3's `md5_of_parts-N` format.
 - **Routing**: Axum wildcard `/{*key}` handler, single route for all methods. Query-param dispatch for PUT (PutObject vs UploadPart) and POST (CreateMultipartUpload vs CompleteMultipartUpload).
-- **ServeDir**: Rejected — no ETag support, incompatible with our conditional header requirements.
+- **ServeDir**: Rejected - no ETag support, incompatible with our conditional header requirements.
 - **Multipart state**: In-memory (`tokio::sync::RwLock<HashMap>`), not persisted. Lost on restart.
 - **AbortMultipartUpload**: Planned as Stage 5.
 - **ETag disk cache**: `.fxv-etag-cache/` subdirectory within the serve directory. Format: `<mtime_secs> <etag>` per file.
@@ -29,19 +29,19 @@ Dev: `reqwest`, `tempfile`, `filetime`
 ## Stage 2 – GetObject (Complete)
 
 ### Files Created
-- `fxv-storage-server/` — Rust crate root (nightly toolchain via `rust-toolchain.toml`)
-- `src/lib.rs` — Library target, exports `build_app()` for integration tests
-- `src/main.rs` — Binary target: CLI args (`--serve-dir`, `--port`), server startup
-- `src/config.rs` — `Config` struct (serve_dir, port)
-- `src/errors.rs` — `error_chain!` definitions: Io, StripPrefix, PathTraversal, InvalidRange, UploadNotFound, PartNotFound
-- `src/etag.rs` — BLAKE3 ETag computation; `.fxv-etag-cache/` disk cache with mtime-based invalidation
-- `src/store.rs` — `FileStore`: async directory walk, builds `HashMap<String, FileEntry>` at startup; `SharedStore = Arc<RwLock<FileStore>>`
-- `src/conditional.rs` — RFC 7232 conditional evaluation (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since)
-- `src/range.rs` — Range header parsing, `ByteRange`, `content_range_header()` formatting
-- `src/handlers/get_object.rs` — Full GetObject handler: 200, 206, 304, 412, 416, 500
-- `src/handlers/put_object.rs` — Stub (501 Not Implemented)
-- `src/handlers/multipart.rs` — Stub (501 Not Implemented)
-- `tests/get_object.rs` — 8 integration tests covering: 200 full, 404, ETag/Last-Modified headers, 206 range, 304 If-None-Match, 412 If-Match, nested paths, 416
+- `fxv-storage-server/` - Rust crate root (nightly toolchain via `rust-toolchain.toml`)
+- `src/lib.rs` - Library target, exports `build_app()` for integration tests
+- `src/main.rs` - Binary target: CLI args (`--serve-dir`, `--port`), server startup
+- `src/config.rs` - `Config` struct (serve_dir, port)
+- `src/errors.rs` - `error_chain!` definitions: Io, StripPrefix, PathTraversal, InvalidRange, UploadNotFound, PartNotFound
+- `src/etag.rs` - BLAKE3 ETag computation; `.fxv-etag-cache/` disk cache with mtime-based invalidation
+- `src/store.rs` - `FileStore`: async directory walk, builds `HashMap<String, FileEntry>` at startup; `SharedStore = Arc<RwLock<FileStore>>`
+- `src/conditional.rs` - RFC 7232 conditional evaluation (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since)
+- `src/range.rs` - Range header parsing, `ByteRange`, `content_range_header()` formatting
+- `src/handlers/get_object.rs` - Full GetObject handler: 200, 206, 304, 412, 416, 500
+- `src/handlers/put_object.rs` - Stub (501 Not Implemented)
+- `src/handlers/multipart.rs` - Stub (501 Not Implemented)
+- `tests/get_object.rs` - 8 integration tests covering: 200 full, 404, ETag/Last-Modified headers, 206 range, 304 If-None-Match, 412 If-Match, nested paths, 416
 
 ### Test Results
 - 30 unit tests: all pass
@@ -50,29 +50,29 @@ Dev: `reqwest`, `tempfile`, `filetime`
 - `cargo clippy`: clean
 
 ### Git Commits
-- `Initial project scaffold` — AGENT.md added
-- `Stage 2: GetObject implementation` — full GetObject with tests (pending)
+- `Initial project scaffold` - AGENT.md added
+- `Stage 2: GetObject implementation` - full GetObject with tests (pending)
 
 ---
 
 ## Stage 3 – PutObject (Complete)
 
 ### Files Created/Modified
-- `src/handlers/put_object.rs` — Full PutObject handler with:
+- `src/handlers/put_object.rs` - Full PutObject handler with:
   - Atomic write: body → temp file in serve_dir, BLAKE3 computed during streaming, then `rename()`
   - Conditional headers: `If-None-Match: *` (prevent overwrite), `If-Match: <etag>` (conditional replace)
   - Path traversal protection via `sanitize_key()`: strips leading `/`, rejects `..` and absolute components
   - Parent directory creation for nested keys
   - ETag disk cache update after successful write
   - In-memory `FileStore` index updated after successful write
-- `src/store.rs` — Added `serve_dir: PathBuf` field to `FileStore`, `serve_dir()` accessor, `upsert()` now public
-- `Cargo.toml` — Added `http-body-util = "0.1"` for `BodyExt::frame()` body streaming
-- `tests/put_object.rs` — 9 integration tests
+- `src/store.rs` - Added `serve_dir: PathBuf` field to `FileStore`, `serve_dir()` accessor, `upsert()` now public
+- `Cargo.toml` - Added `http-body-util = "0.1"` for `BodyExt::frame()` body streaming
+- `tests/put_object.rs` - 9 integration tests
 
 ### Key Decisions
 - **`If-Match: *`** on PutObject: treated as "object must exist, any ETag OK". If file doesn't exist → 412.
 - **Nested key directories**: created with `create_dir_all()` before writing; failure is non-fatal (write will fail and return 500 anyway).
-- **Leading `/` in key**: stripped by `sanitize_key()` before path resolution — matches S3 behavior where `/key` and `key` are equivalent.
+- **Leading `/` in key**: stripped by `sanitize_key()` before path resolution - matches S3 behavior where `/key` and `key` are equivalent.
 
 ### Test Results
 - 33 unit tests: all pass
@@ -88,18 +88,18 @@ Dev: `reqwest`, `tempfile`, `filetime`
 ## Stage 4 – Multipart Upload (Complete)
 
 ### Files Created/Modified
-- `src/multipart_state.rs` — `SharedUploadState = Arc<RwLock<HashMap<String, UploadEntry>>>`, `PartEntry`, `UploadEntry`; `new_shared_upload_state()`
-- `src/s3_xml_compat.rs` — XML types: `InitiateMultipartUploadResult`, `CompleteMultipartUpload`, `CompletePart`, `CompleteMultipartUploadResult`; `to_xml_bytes()` / `from_xml_bytes()` helpers
-- `src/handlers/multipart.rs` — `create_multipart_upload()`, `complete_multipart_upload()`, `assemble_parts()` 
-- `src/handlers/put_object.rs` — `upload_part()` added to `put_dispatch`
-- `src/lib.rs` — `AppState { store, uploads }` combined state struct replaces bare `SharedStore`; all handlers updated to use `AppState`
-- `tests/multipart.rs` — 5 integration tests
+- `src/multipart_state.rs` - `SharedUploadState = Arc<RwLock<HashMap<String, UploadEntry>>>`, `PartEntry`, `UploadEntry`; `new_shared_upload_state()`
+- `src/s3_xml_compat.rs` - XML types: `InitiateMultipartUploadResult`, `CompleteMultipartUpload`, `CompletePart`, `CompleteMultipartUploadResult`; `to_xml_bytes()` / `from_xml_bytes()` helpers
+- `src/handlers/multipart.rs` - `create_multipart_upload()`, `complete_multipart_upload()`, `assemble_parts()` 
+- `src/handlers/put_object.rs` - `upload_part()` added to `put_dispatch`
+- `src/lib.rs` - `AppState { store, uploads }` combined state struct replaces bare `SharedStore`; all handlers updated to use `AppState`
+- `tests/multipart.rs` - 5 integration tests
 
 ### Key Decisions
 - **`AppState`**: Combined store + upload state passed to all Axum handlers via `State<AppState>`. Clean separation from `SharedStore` and `SharedUploadState`.
-- **Part temp files**: Stored in `<serve_dir>/.fxv-etag-cache/part-<uploadId>-<partNumber>.fxv_tmp` — reuses cache directory, cleaned up on CompleteMultipartUpload.
+- **Part temp files**: Stored in `<serve_dir>/.fxv-etag-cache/part-<uploadId>-<partNumber>.fxv_tmp` - reuses cache directory, cleaned up on CompleteMultipartUpload.
 - **Reassembly**: `assemble_parts()` reads each part into memory sequentially (no mmap). Acceptable for our use case.
-- **ETag consistency**: BLAKE3 of assembled file = BLAKE3 of direct PutObject with same content — verified by `test_multipart_etag_matches_putobject_etag`.
+- **ETag consistency**: BLAKE3 of assembled file = BLAKE3 of direct PutObject with same content - verified by `test_multipart_etag_matches_putobject_etag`.
 - **Part re-upload**: Old temp file for the same part number is deleted when overwritten.
 
 ### Test Results
@@ -116,8 +116,8 @@ Dev: `reqwest`, `tempfile`, `filetime`
 ## Stage 5 – AbortMultipartUpload (Complete)
 
 ### Files Created/Modified
-- `src/handlers/multipart.rs` — `abort_multipart_upload()` and `delete_dispatch()` with `DeleteParams { upload_id }`
-- `tests/abort_multipart.rs` — 4 integration tests
+- `src/handlers/multipart.rs` - `abort_multipart_upload()` and `delete_dispatch()` with `DeleteParams { upload_id }`
+- `tests/abort_multipart.rs` - 4 integration tests
 
 ### Key Decisions
 - **Response code**: 204 No Content on success (S3 standard).
