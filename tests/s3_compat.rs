@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 const BUCKET: &str = "test-bucket";
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// == helpers
 
 async fn spawn_server(serve_dir: PathBuf) -> String {
     let store = fxv_storage_server::store::build_shared_store(&serve_dir)
@@ -50,7 +50,7 @@ fn s3_client(endpoint_url: &str) -> Client {
     Client::from_conf(config)
 }
 
-// ── PutObject ─────────────────────────────────────────────────────────────────
+// == PutObject
 
 #[tokio::test]
 async fn s3_put_object_and_get_object() {
@@ -93,7 +93,7 @@ async fn s3_put_object_and_get_object() {
     assert_eq!(body.as_ref(), b"hello from s3 client");
 }
 
-// ── GetObject: 404 for missing key ───────────────────────────────────────────
+// == GetObject: 404 for missing key
 
 /// The server now returns S3-format XML error bodies, so the SDK maps 404 → NoSuchKey.
 #[tokio::test]
@@ -119,7 +119,7 @@ async fn s3_get_object_not_found() {
     );
 }
 
-// ── GetObject: ETag conditional (If-None-Match) ───────────────────────────────
+// == GetObject: ETag conditional (If-None-Match)
 
 #[tokio::test]
 async fn s3_get_object_if_none_match_304() {
@@ -168,7 +168,7 @@ async fn s3_get_object_if_none_match_304() {
     }
 }
 
-// ── GetObject: Range request ──────────────────────────────────────────────────
+// == GetObject: Range request
 
 #[tokio::test]
 async fn s3_get_object_range() {
@@ -199,7 +199,7 @@ async fn s3_get_object_range() {
     assert_eq!(body.as_ref(), b"2345");
 }
 
-// ── PutObject: If-None-Match: * ───────────────────────────────────────────────
+// == PutObject: If-None-Match: *
 
 #[tokio::test]
 async fn s3_put_object_if_none_match_star_prevents_overwrite() {
@@ -237,7 +237,7 @@ async fn s3_put_object_if_none_match_star_prevents_overwrite() {
     assert_eq!(raw, 412, "Expected 412 Precondition Failed");
 }
 
-// ── Multipart Upload: full flow ───────────────────────────────────────────────
+// == Multipart Upload: full flow
 
 #[tokio::test]
 async fn s3_multipart_upload_full_flow() {
@@ -330,7 +330,7 @@ async fn s3_multipart_upload_full_flow() {
     assert_eq!(body.as_ref(), b"hello world");
 }
 
-// ── AbortMultipartUpload ──────────────────────────────────────────────────────
+// == AbortMultipartUpload
 
 #[tokio::test]
 async fn s3_abort_multipart_upload() {

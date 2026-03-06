@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// == helpers
 
 async fn spawn_server(serve_dir: PathBuf) -> String {
     let store = fxv_storage_server::store::build_shared_store(&serve_dir)
@@ -36,7 +36,7 @@ fn parse_etag_from_xml(xml: &str) -> String {
     xml[start..end].to_owned()
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// == tests
 
 /// Full multipart flow: create, upload 2 parts, complete, verify content.
 #[tokio::test]

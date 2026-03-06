@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// == helpers
 
 /// Spawn a server on an ephemeral port and return its base URL.
 async fn spawn_server(serve_dir: PathBuf) -> String {
@@ -27,7 +27,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
     format!("http://{}", addr)
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// == tests
 
 #[tokio::test]
 async fn test_get_existing_file_200() {

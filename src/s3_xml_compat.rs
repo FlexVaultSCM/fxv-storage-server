@@ -8,7 +8,7 @@
 use axum::{body::Body, http::StatusCode, response::Response};
 use serde::{Deserialize, Serialize};
 
-// ── S3 error responses ───────────────────────────────────────────────────────
+// == S3 error responses
 
 /// Build an S3-compatible XML error `Response`.
 ///
@@ -82,7 +82,7 @@ pub fn err_internal() -> Response {
     )
 }
 
-// ── CreateMultipartUpload response ──────────────────────────────────────────
+// == CreateMultipartUpload response
 
 /// Response body for the CreateMultipartUpload operation.
 ///
@@ -96,7 +96,7 @@ pub struct InitiateMultipartUploadResult {
     pub upload_id: String,
 }
 
-// ── CompleteMultipartUpload request ─────────────────────────────────────────
+// == CompleteMultipartUpload request
 
 /// Request body for the CompleteMultipartUpload operation.
 ///
@@ -119,7 +119,7 @@ pub struct CompletePart {
     pub etag: String,
 }
 
-// ── CompleteMultipartUpload response ────────────────────────────────────────
+// == CompleteMultipartUpload response
 
 /// Response body for the CompleteMultipartUpload operation.
 ///
@@ -133,7 +133,7 @@ pub struct CompleteMultipartUploadResult {
     pub etag: String,
 }
 
-// ── XML serialisation helpers ────────────────────────────────────────────────
+// == XML serialisation helpers
 
 /// Serialise a value to an XML byte string with an `<?xml ...?>` declaration.
 pub fn to_xml_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, quick_xml::se::SeError> {

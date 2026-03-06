@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// == helpers
 
 async fn spawn_server(serve_dir: PathBuf) -> String {
     let store = fxv_storage_server::store::build_shared_store(&serve_dir)
@@ -26,7 +26,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
     format!("http://{}", addr)
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// == tests
 
 /// Basic upload: PUT a file that didn't exist, then GET it back.
 #[tokio::test]
