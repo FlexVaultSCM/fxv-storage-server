@@ -1,6 +1,6 @@
 // Public library interface for use in integration tests.
-pub mod config;
 pub mod conditional;
+pub mod config;
 pub mod errors;
 pub mod etag;
 pub mod handlers;
@@ -15,7 +15,7 @@ use handlers::{
     multipart::{delete_dispatch, post_dispatch},
     put_object::put_dispatch,
 };
-use multipart_state::{new_shared_upload_state, SharedUploadState};
+use multipart_state::{SharedUploadState, new_shared_upload_state};
 use store::SharedStore;
 
 /// Combined application state threaded through all handlers.

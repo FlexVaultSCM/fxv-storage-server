@@ -1,16 +1,16 @@
+use crate::AppState;
 use crate::etag;
 use crate::multipart_state::UploadEntry;
 use crate::s3_xml_compat::{
+    CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
     err_internal, err_invalid_argument, err_invalid_part, err_malformed_xml, err_no_such_upload,
-    from_xml_bytes, to_xml_bytes, CompleteMultipartUpload, CompleteMultipartUploadResult,
-    InitiateMultipartUploadResult,
+    from_xml_bytes, to_xml_bytes,
 };
 use crate::store::FileEntry;
-use crate::AppState;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::Response,
 };
 use bytes::Bytes;
@@ -110,13 +110,14 @@ async fn complete_multipart_upload(
     let upload_entry = {
         let uploads = state.uploads.read().await;
         match uploads.get(&upload_id) {
-            Some(e) if e.key == key => {
-                e.parts
-                    .iter()
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect::<HashMap<u32, _>>()
+            Some(e) if e.key == key => e
+                .parts
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect::<HashMap<u32, _>>(),
+            Some(_) => {
+                return err_invalid_argument("The upload ID is not associated with this key.");
             }
-            Some(_) => return err_invalid_argument("The upload ID is not associated with this key."),
             None => return err_no_such_upload(),
         }
     };
@@ -144,12 +145,16 @@ async fn complete_multipart_upload(
     }
 
     // Assemble into a temp file, computing BLAKE3 over the full content
-    let tmp_path = abs_path.with_extension(format!(
-        "{}.fxv_tmp",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let tmp_path = abs_path.with_extension(format!("{}.fxv_tmp", uuid::Uuid::new_v4().simple()));
 
-    let assemble_result = assemble_parts(&ordered_parts.iter().map(|(_, p)| p.abs_path.clone()).collect::<Vec<_>>(), &tmp_path).await;
+    let assemble_result = assemble_parts(
+        &ordered_parts
+            .iter()
+            .map(|(_, p)| p.abs_path.clone())
+            .collect::<Vec<_>>(),
+        &tmp_path,
+    )
+    .await;
     let (total_size, final_etag, modified) = match assemble_result {
         Ok(r) => r,
         Err(e) => {

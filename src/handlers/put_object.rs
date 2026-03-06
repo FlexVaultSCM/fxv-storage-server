@@ -1,12 +1,14 @@
+use crate::AppState;
 use crate::etag;
 use crate::multipart_state::{PartEntry, SharedUploadState};
-use crate::s3_xml_compat::{err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed};
+use crate::s3_xml_compat::{
+    err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed,
+};
 use crate::store::{FileEntry, SharedStore};
-use crate::AppState;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::Response,
 };
 use serde::Deserialize;
@@ -39,12 +41,7 @@ pub async fn put_dispatch(
 }
 
 /// PutObject — write a single file atomically.
-async fn put_object(
-    store: SharedStore,
-    key: String,
-    headers: HeaderMap,
-    body: Body,
-) -> Response {
+async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: Body) -> Response {
     // Resolve the serve directory from the store
     let serve_dir = {
         let s = store.read().await;
@@ -89,18 +86,18 @@ async fn put_object(
 
     // Create parent directories if needed
     if let Some(parent) = abs_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            warn!("create_dir_all failed for {:?}: {}", parent, e);
-            e
-        }).ok();
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| {
+                warn!("create_dir_all failed for {:?}: {}", parent, e);
+                e
+            })
+            .ok();
         // If we failed to create dirs, the temp file write below will fail and return 500
     }
 
     // Write to a temp file in the same directory (so rename is atomic)
-    let tmp_path = abs_path.with_extension(format!(
-        "{}.fxv_tmp",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let tmp_path = abs_path.with_extension(format!("{}.fxv_tmp", uuid::Uuid::new_v4().simple()));
 
     let write_result = write_body_to_temp(&tmp_path, body).await;
 
@@ -181,12 +178,7 @@ async fn put_object(
 }
 
 /// UploadPart — store a single part for a multipart upload.
-async fn upload_part(
-    state: AppState,
-    key: String,
-    params: PutParams,
-    body: Body,
-) -> Response {
+async fn upload_part(state: AppState, key: String, params: PutParams, body: Body) -> Response {
     let part_number = match params.part_number {
         Some(n) if (1..=10_000).contains(&n) => n,
         _ => return err_invalid_argument("Part number must be between 1 and 10000."),
@@ -201,7 +193,9 @@ async fn upload_part(
         let uploads = state.uploads.read().await;
         match uploads.get(&upload_id) {
             Some(entry) if entry.key == key => {}
-            Some(_) => return err_invalid_argument("The upload ID is not associated with this key."),
+            Some(_) => {
+                return err_invalid_argument("The upload ID is not associated with this key.");
+            }
             None => return err_no_such_upload(),
         }
     }
@@ -210,11 +204,7 @@ async fn upload_part(
     let serve_dir = state.store.read().await.serve_dir().to_owned();
     let cache_dir = serve_dir.join(".fxv-etag-cache");
     let _ = tokio::fs::create_dir_all(&cache_dir).await;
-    let tmp_path = cache_dir.join(format!(
-        "part-{}-{}.fxv_tmp",
-        upload_id,
-        part_number
-    ));
+    let tmp_path = cache_dir.join(format!("part-{}-{}.fxv_tmp", upload_id, part_number));
 
     let write_result = write_body_to_temp(&tmp_path, body).await;
     let (size, etag, _) = match write_result {
@@ -245,7 +235,10 @@ async fn upload_part(
         }
     }
 
-    debug!("UploadPart {} part {} → ETag {}", upload_id, part_number, etag);
+    debug!(
+        "UploadPart {} part {} → ETag {}",
+        upload_id, part_number, etag
+    );
     Response::builder()
         .status(StatusCode::OK)
         .header(header::ETAG, etag)
@@ -332,4 +325,3 @@ mod tests {
         assert!(sanitize_key("/").is_none());
     }
 }
-

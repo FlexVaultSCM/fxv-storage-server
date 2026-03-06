@@ -2,7 +2,6 @@
 ///
 /// Spins up a full fxv-storage-server instance and tests PUT operations,
 /// including conditional headers and path traversal rejection.
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -44,15 +43,27 @@ async fn test_put_new_file_200_and_readable() {
         .expect("PUT");
 
     assert_eq!(resp.status(), 200);
-    let etag = resp.headers().get("etag").expect("ETag header").to_str().unwrap().to_owned();
-    assert!(etag.starts_with('"') && etag.ends_with('"'), "ETag should be double-quoted");
+    let etag = resp
+        .headers()
+        .get("etag")
+        .expect("ETag header")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        etag.starts_with('"') && etag.ends_with('"'),
+        "ETag should be double-quoted"
+    );
 
     // Verify the file is readable via GET
     let get_resp = reqwest::get(format!("{}/newfile.txt", base))
         .await
         .expect("GET");
     assert_eq!(get_resp.status(), 200);
-    assert_eq!(get_resp.bytes().await.expect("body").as_ref(), b"hello from put");
+    assert_eq!(
+        get_resp.bytes().await.expect("body").as_ref(),
+        b"hello from put"
+    );
 }
 
 /// Overwrite: PUT to an existing key replaces the content.
@@ -132,7 +143,13 @@ async fn test_put_if_match_correct_etag_200() {
         .await
         .expect("PUT1");
     assert_eq!(put1.status(), 200);
-    let etag = put1.headers().get("etag").expect("etag").to_str().unwrap().to_owned();
+    let etag = put1
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
 
     // Second PUT with If-Match matching the ETag
     let put2 = client
@@ -155,7 +172,10 @@ async fn test_put_if_match_wrong_etag_412() {
     let client = reqwest::Client::new();
     let resp = client
         .put(format!("{}/file.txt", base))
-        .header("If-Match", "\"0000000000000000000000000000000000000000000000000000000000000000\"")
+        .header(
+            "If-Match",
+            "\"0000000000000000000000000000000000000000000000000000000000000000\"",
+        )
         .body("new content")
         .send()
         .await

@@ -1,11 +1,13 @@
+use crate::AppState;
 use crate::conditional::{self, ConditionalResult};
 use crate::range;
-use crate::s3_xml_compat::{err_internal, err_invalid_range, err_no_such_key, err_precondition_failed};
-use crate::AppState;
+use crate::s3_xml_compat::{
+    err_internal, err_invalid_range, err_no_such_key, err_precondition_failed,
+};
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::Response,
 };
 use tokio::io::AsyncSeekExt;
@@ -76,7 +78,9 @@ pub async fn get_object(
             let mut resp = err_invalid_range();
             resp.headers_mut().insert(
                 header::CONTENT_RANGE,
-                format!("bytes */{}", entry.size).parse().expect("content-range"),
+                format!("bytes */{}", entry.size)
+                    .parse()
+                    .expect("content-range"),
             );
             return resp;
         }
@@ -124,7 +128,10 @@ pub async fn get_object(
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, "application/octet-stream")
                 .header(header::CONTENT_LENGTH, range.len().to_string())
-                .header(header::CONTENT_RANGE, range.content_range_header(entry.size))
+                .header(
+                    header::CONTENT_RANGE,
+                    range.content_range_header(entry.size),
+                )
                 .header(header::ETAG, &entry.etag)
                 .header(header::LAST_MODIFIED, last_modified_str)
                 .header(header::ACCEPT_RANGES, "bytes")

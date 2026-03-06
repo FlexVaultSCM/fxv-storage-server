@@ -2,7 +2,6 @@
 ///
 /// Spins up a full fxv-storage-server instance, serves files from a temp
 /// directory, and verifies correct HTTP behaviour via reqwest.
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -67,8 +66,14 @@ async fn test_get_returns_etag_and_last_modified() {
 
     assert_eq!(resp.status(), 200);
     let etag = resp.headers().get("etag").expect("etag header");
-    assert!(etag.to_str().unwrap().starts_with('"'), "ETag must be quoted");
-    assert!(resp.headers().contains_key("last-modified"), "Last-Modified must be present");
+    assert!(
+        etag.to_str().unwrap().starts_with('"'),
+        "ETag must be quoted"
+    );
+    assert!(
+        resp.headers().contains_key("last-modified"),
+        "Last-Modified must be present"
+    );
 }
 
 #[tokio::test]
@@ -140,7 +145,10 @@ async fn test_if_match_412_on_mismatch() {
     let client = reqwest::Client::new();
     let resp = client
         .get(format!("{}/file.bin", base))
-        .header("If-Match", "\"wrongetag000000000000000000000000000000000000000000000000000000000000\"")
+        .header(
+            "If-Match",
+            "\"wrongetag000000000000000000000000000000000000000000000000000000000000\"",
+        )
         .send()
         .await
         .expect("GET");

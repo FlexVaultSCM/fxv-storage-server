@@ -44,10 +44,9 @@ pub fn parse_range(header_value: Option<&str>, file_size: u64) -> Result<Option<
 
     // Only support a single range (S3 constraint)
     if bytes_part.contains(',') {
-        return Err(ErrorKind::InvalidRange(
-            "multi-range requests are not supported".to_owned(),
-        )
-        .into());
+        return Err(
+            ErrorKind::InvalidRange("multi-range requests are not supported".to_owned()).into(),
+        );
     }
 
     let (start_str, end_str) = bytes_part
@@ -64,10 +63,9 @@ pub fn parse_range(header_value: Option<&str>, file_size: u64) -> Result<Option<
                 .parse()
                 .map_err(|_| ErrorKind::InvalidRange(format!("bad end: {}", e)))?;
             if start > end {
-                return Err(ErrorKind::InvalidRange(
-                    format!("start {} > end {}", start, end),
-                )
-                .into());
+                return Err(
+                    ErrorKind::InvalidRange(format!("start {} > end {}", start, end)).into(),
+                );
             }
             (start, end.min(file_size.saturating_sub(1)))
         }
@@ -87,15 +85,18 @@ pub fn parse_range(header_value: Option<&str>, file_size: u64) -> Result<Option<
             (start, file_size.saturating_sub(1))
         }
         _ => {
-            return Err(ErrorKind::InvalidRange(format!("empty range spec: {}", bytes_part)).into());
+            return Err(
+                ErrorKind::InvalidRange(format!("empty range spec: {}", bytes_part)).into(),
+            );
         }
     };
 
     if file_size == 0 || start >= file_size {
-        return Err(
-            ErrorKind::InvalidRange(format!("range not satisfiable: start={} size={}", start, file_size))
-                .into(),
-        );
+        return Err(ErrorKind::InvalidRange(format!(
+            "range not satisfiable: start={} size={}",
+            start, file_size
+        ))
+        .into());
     }
 
     Ok(Some(ByteRange { start, end }))

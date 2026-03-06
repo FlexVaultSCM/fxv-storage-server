@@ -1,3 +1,4 @@
+use aws_sdk_s3::Client;
 /// S3 client compatibility tests.
 ///
 /// Spins up a real fxv-storage-server instance and drives it with the
@@ -12,11 +13,9 @@
 /// captured as the key and the file lands at `<serve_dir>/BUCKET/key`.
 /// That is intentional — this test validates wire-level compatibility,
 /// not bucket semantics.
-
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use aws_sdk_s3::Client;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -70,7 +69,11 @@ async fn s3_put_object_and_get_object() {
         .expect("PutObject");
 
     let etag = put_resp.e_tag().expect("ETag in PutObject response");
-    assert!(etag.starts_with('"') && etag.ends_with('"'), "ETag should be double-quoted, got: {}", etag);
+    assert!(
+        etag.starts_with('"') && etag.ends_with('"'),
+        "ETag should be double-quoted, got: {}",
+        etag
+    );
 
     // GetObject
     let get_resp = client

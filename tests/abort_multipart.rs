@@ -1,5 +1,4 @@
 /// Integration tests for AbortMultipartUpload (Stage 5).
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -42,7 +41,10 @@ async fn test_abort_multipart_upload_204() {
 
     // Upload a part
     client
-        .put(format!("{}/abortable.bin?partNumber=1&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/abortable.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
         .body("some data")
         .send()
         .await
@@ -113,7 +115,10 @@ async fn test_abort_does_not_create_file() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     client
-        .put(format!("{}/ghost.bin?partNumber=1&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/ghost.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
         .body("phantom data")
         .send()
         .await

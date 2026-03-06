@@ -65,11 +65,7 @@ impl FileStore {
 
 /// Recursively walk `dir`, compute ETags, and collect entries into `map`.
 /// `rel_base` is the serve root; used to produce relative keys.
-async fn walk_dir(
-    rel_base: &Path,
-    dir: &Path,
-    map: &mut HashMap<String, FileEntry>,
-) -> Result<()> {
+async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEntry>) -> Result<()> {
     let mut read_dir = tokio::fs::read_dir(dir).await?;
     while let Some(entry) = read_dir.next_entry().await? {
         let path = entry.path();
@@ -77,7 +73,11 @@ async fn walk_dir(
 
         if file_type.is_dir() {
             // Skip the ETag cache directory
-            if path.file_name().map(|n| n == etag::ETAG_CACHE_DIR).unwrap_or(false) {
+            if path
+                .file_name()
+                .map(|n| n == etag::ETAG_CACHE_DIR)
+                .unwrap_or(false)
+            {
                 continue;
             }
             // Recurse — Box the future to avoid infinite-size type
@@ -160,7 +160,11 @@ mod tests {
         let store = FileStore::build(dir.path()).await.expect("build");
         assert!(store.get("real.txt").is_some());
         // Cache dir contents must not appear
-        assert!(store.get(&format!("{}/some_cache_file", etag::ETAG_CACHE_DIR)).is_none());
+        assert!(
+            store
+                .get(&format!("{}/some_cache_file", etag::ETAG_CACHE_DIR))
+                .is_none()
+        );
     }
 
     #[tokio::test]

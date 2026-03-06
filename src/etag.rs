@@ -65,12 +65,7 @@ pub async fn load_cached_etag(
 /// `complete_multipart_upload` uphold this invariant.  The only other call-site
 /// is `get_or_compute_etag`, which is used exclusively during startup
 /// (`FileStore::build`) before any request is served.
-pub async fn save_cached_etag(
-    serve_dir: &Path,
-    rel_path: &Path,
-    file_mtime_secs: i64,
-    etag: &str,
-) {
+pub async fn save_cached_etag(serve_dir: &Path, rel_path: &Path, file_mtime_secs: i64, etag: &str) {
     let cache_file = cache_path(serve_dir, rel_path);
     if let Some(parent) = cache_file.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
@@ -92,9 +87,7 @@ pub async fn get_or_compute_etag(serve_dir: &Path, rel_path: &Path) -> Result<St
     let mtime_secs = meta
         .modified()
         .ok()
-        .and_then(|t| {
-            t.duration_since(std::time::UNIX_EPOCH).ok()
-        })
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
@@ -166,8 +159,7 @@ mod tests {
         // Overwrite with different content and update mtime manually
         std::fs::write(&abs, b"version 2").expect("overwrite");
         // Force a different mtime by bumping it
-        let new_mtime = std::time::SystemTime::now()
-            + std::time::Duration::from_secs(2);
+        let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
         let ft = filetime::FileTime::from_system_time(new_mtime);
         filetime::set_file_mtime(&abs, ft).expect("set mtime");
 

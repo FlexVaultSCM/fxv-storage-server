@@ -2,7 +2,6 @@
 ///
 /// Spins up a full fxv-storage-server instance and tests the full
 /// CreateMultipartUpload → UploadPart × N → CompleteMultipartUpload flow.
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -59,23 +58,41 @@ async fn test_multipart_full_flow() {
 
     // 2. UploadPart 1
     let part1_resp = client
-        .put(format!("{}/multipart.bin?partNumber=1&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/multipart.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
         .body("hello ")
         .send()
         .await
         .expect("UploadPart 1");
     assert_eq!(part1_resp.status(), 200);
-    let etag1 = part1_resp.headers().get("etag").expect("etag1").to_str().unwrap().to_owned();
+    let etag1 = part1_resp
+        .headers()
+        .get("etag")
+        .expect("etag1")
+        .to_str()
+        .unwrap()
+        .to_owned();
 
     // 3. UploadPart 2
     let part2_resp = client
-        .put(format!("{}/multipart.bin?partNumber=2&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/multipart.bin?partNumber=2&uploadId={}",
+            base, upload_id
+        ))
         .body("world")
         .send()
         .await
         .expect("UploadPart 2");
     assert_eq!(part2_resp.status(), 200);
-    let etag2 = part2_resp.headers().get("etag").expect("etag2").to_str().unwrap().to_owned();
+    let etag2 = part2_resp
+        .headers()
+        .get("etag")
+        .expect("etag2")
+        .to_str()
+        .unwrap()
+        .to_owned();
 
     // 4. CompleteMultipartUpload
     let complete_xml = format!(
@@ -99,7 +116,10 @@ async fn test_multipart_full_flow() {
         .await
         .expect("GET");
     assert_eq!(get_resp.status(), 200);
-    assert_eq!(get_resp.bytes().await.expect("body").as_ref(), b"hello world");
+    assert_eq!(
+        get_resp.bytes().await.expect("body").as_ref(),
+        b"hello world"
+    );
 }
 
 /// Completing with a wrong ETag for a part should return 400.
@@ -117,7 +137,10 @@ async fn test_multipart_complete_wrong_etag_400() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     client
-        .put(format!("{}/file.bin?partNumber=1&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/file.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
         .body("data")
         .send()
         .await
@@ -170,7 +193,10 @@ async fn test_multipart_upload_part_invalid_number() {
 
     // Part number 0 is invalid
     let resp = client
-        .put(format!("{}/file.bin?partNumber=0&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/file.bin?partNumber=0&uploadId={}",
+            base, upload_id
+        ))
         .body("data")
         .send()
         .await
@@ -195,7 +221,13 @@ async fn test_multipart_etag_matches_putobject_etag() {
         .await
         .expect("PUT");
     assert_eq!(put_resp.status(), 200);
-    let put_etag = put_resp.headers().get("etag").expect("etag").to_str().unwrap().to_owned();
+    let put_etag = put_resp
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
 
     // Multipart upload in one part
     let create_resp = client
@@ -206,12 +238,21 @@ async fn test_multipart_etag_matches_putobject_etag() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     let part_resp = client
-        .put(format!("{}/multipart.bin?partNumber=1&uploadId={}", base, upload_id))
+        .put(format!(
+            "{}/multipart.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
         .body(content.as_ref())
         .send()
         .await
         .expect("upload part");
-    let part_etag = part_resp.headers().get("etag").expect("etag").to_str().unwrap().to_owned();
+    let part_etag = part_resp
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
 
     let complete_xml = format!(
         r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{}</ETag></Part></CompleteMultipartUpload>"#,
@@ -228,5 +269,8 @@ async fn test_multipart_etag_matches_putobject_etag() {
     let complete_body = complete_resp.text().await.unwrap();
     let multipart_etag = parse_etag_from_xml(&complete_body);
 
-    assert_eq!(put_etag, multipart_etag, "BLAKE3 ETag should be identical for same content");
+    assert_eq!(
+        put_etag, multipart_etag,
+        "BLAKE3 ETag should be identical for same content"
+    );
 }
