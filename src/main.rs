@@ -1,3 +1,4 @@
+use axum::serve::ListenerExt as _;
 use clap::Parser;
 use fxv_storage_server::{build_app, config::Config, store};
 use std::net::SocketAddr;
@@ -5,7 +6,10 @@ use std::path::PathBuf;
 use tracing::info;
 
 #[derive(Debug, Parser)]
-#[command(name = "fxv-storage-server", about = "FlexVault Storage Server — S3-compatible file server")]
+#[command(
+    name = "fxv-storage-server",
+    about = "FlexVault Storage Server — S3-compatible file server"
+)]
 struct Cli {
     /// Directory to serve files from (and upload files to).
     #[arg(long, short = 'd')]
@@ -28,7 +32,11 @@ async fn main() {
     let cli = Cli::parse();
 
     let serve_dir = cli.serve_dir.canonicalize().unwrap_or_else(|e| {
-        eprintln!("Cannot resolve serve-dir '{}': {}", cli.serve_dir.display(), e);
+        eprintln!(
+            "Cannot resolve serve-dir '{}': {}",
+            cli.serve_dir.display(),
+            e
+        );
         std::process::exit(1);
     });
 
@@ -56,8 +64,14 @@ async fn main() {
             std::process::exit(1);
         });
 
-    axum::serve(listener, app)
-        .await
-        .expect("server error");
+    axum::serve(
+        listener.tap_io(|stream| {
+            if let Err(e) = stream.set_nodelay(true) {
+                tracing::warn!("Failed to set TCP_NODELAY: {}", e);
+            }
+        }),
+        app,
+    )
+    .await
+    .expect("server error");
 }
-
