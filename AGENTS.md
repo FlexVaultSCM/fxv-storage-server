@@ -180,6 +180,10 @@ full multipart flow, AbortMultipartUpload.
 
 ## Development Rules
 
+### Language
+Prefer American English spelling in code, comments and documentation, e.g. "initialize",
+"optimized", "behavior", "canceled", etc.
+
 ### Rust
 
 - Use the **nightly** toolchain (pinned via `rust-toolchain.toml`).
