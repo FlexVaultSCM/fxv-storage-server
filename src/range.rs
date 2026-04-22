@@ -2,6 +2,7 @@
 //!
 //! Only single-range requests are supported (S3 does not support multi-range GET).
 
+// == Internal
 use crate::errors::*;
 
 /// A parsed, validated byte range within a file of known size.
@@ -12,10 +13,12 @@ pub struct ByteRange {
 }
 
 impl ByteRange {
+    /// Return the number of bytes covered by this inclusive range.
     pub fn len(&self) -> u64 {
         self.end - self.start + 1
     }
 
+    /// Report whether this range is empty.
     pub fn is_empty(&self) -> bool {
         false // ByteRange always has at least 1 byte (enforced by parse_range)
     }
@@ -100,12 +103,16 @@ mod tests {
 
     #[test]
     fn test_no_range_header() {
+        // Verify a missing Range header yields no byte range.
         assert_eq!(parse_range(None, 1000).unwrap(), None);
     }
 
     #[test]
     fn test_full_explicit_range() {
+        // Parse a fully specified start/end byte range.
         let r = parse_range(Some("bytes=0-499"), 1000).unwrap().unwrap();
+
+        // Verify the parsed range boundaries and length.
         assert_eq!(r.start, 0);
         assert_eq!(r.end, 499);
         assert_eq!(r.len(), 500);
@@ -113,49 +120,67 @@ mod tests {
 
     #[test]
     fn test_range_clamps_to_file_size() {
+        // Parse a range whose end exceeds the file length.
         let r = parse_range(Some("bytes=0-9999"), 100).unwrap().unwrap();
+
+        // Verify the parser clamps the end to the final byte.
         assert_eq!(r.end, 99);
     }
 
     #[test]
     fn test_open_ended_range() {
+        // Parse a range that runs from a start offset to EOF.
         let r = parse_range(Some("bytes=500-"), 1000).unwrap().unwrap();
+
+        // Verify the range extends to the last byte in the file.
         assert_eq!(r.start, 500);
         assert_eq!(r.end, 999);
     }
 
     #[test]
     fn test_suffix_range() {
+        // Parse a suffix range requesting the last N bytes.
         let r = parse_range(Some("bytes=-200"), 1000).unwrap().unwrap();
+
+        // Verify the computed start offset keeps the last 200 bytes.
         assert_eq!(r.start, 800);
         assert_eq!(r.end, 999);
     }
 
     #[test]
     fn test_suffix_range_larger_than_file() {
+        // Parse a suffix range larger than the file itself.
         let r = parse_range(Some("bytes=-9999"), 100).unwrap().unwrap();
+
+        // Verify the parser falls back to the full file.
         assert_eq!(r.start, 0);
         assert_eq!(r.end, 99);
     }
 
     #[test]
     fn test_invalid_multi_range() {
+        // Verify multi-range requests are rejected for this S3 subset.
         assert!(parse_range(Some("bytes=0-100,200-300"), 1000).is_err());
     }
 
     #[test]
     fn test_invalid_start_gt_end() {
+        // Verify inverted ranges are rejected.
         assert!(parse_range(Some("bytes=500-100"), 1000).is_err());
     }
 
     #[test]
     fn test_range_not_satisfiable_start_ge_size() {
+        // Verify ranges starting beyond EOF are rejected.
         assert!(parse_range(Some("bytes=1000-1099"), 1000).is_err());
     }
 
     #[test]
     fn test_content_range_header() {
+        // Build a representative byte range.
         let r = ByteRange { start: 0, end: 499 };
+
+        // Verify the helper renders a valid Content-Range header value.
         assert_eq!(r.content_range_header(1000), "bytes 0-499/1000");
     }
 }

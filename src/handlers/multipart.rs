@@ -1,13 +1,19 @@
+// == Std
+use std::{collections::HashMap, io, path::Path as FsPath, time::SystemTime};
+
+// == Internal
 use crate::{
     AppState, etag,
     metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
-    multipart_state::UploadEntry,
+    multipart_state::{PartEntry, UploadEntry},
     s3_xml_compat::{
-        CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult, err_internal,
-        err_invalid_argument, err_invalid_part, err_malformed_xml, err_no_such_upload, from_xml_bytes, to_xml_bytes,
+        CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult, S3ErrorKind,
+        from_xml_bytes, s3_error, to_xml_bytes,
     },
     store::FileEntry,
 };
+
+// == External
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -18,7 +24,6 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use std::{collections::HashMap, time::SystemTime};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
@@ -44,7 +49,9 @@ pub async fn post_dispatch(
     } else if let Some(upload_id) = params.upload_id {
         complete_multipart_upload(state, key, upload_id, body).await
     } else {
-        err_invalid_argument("A valid uploads or uploadId query parameter must be provided.")
+        s3_error(S3ErrorKind::InvalidArgument(
+            "A valid uploads or uploadId query parameter must be provided.",
+        ))
     }
 }
 
@@ -72,7 +79,7 @@ async fn create_multipart_upload(state: AppState, key: String, headers: HeaderMa
         Ok(b) => b,
         Err(e) => {
             warn!("XML serialise error: {}", e);
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
     };
 
@@ -91,7 +98,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         Ok(b) => b,
         Err(e) => {
             warn!("Failed to read CompleteMultipartUpload body: {}", e);
-            return err_malformed_xml();
+            return s3_error(S3ErrorKind::MalformedXml);
         }
     };
 
@@ -100,7 +107,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to parse CompleteMultipartUpload XML: {}", e);
-            return err_malformed_xml();
+            return s3_error(S3ErrorKind::MalformedXml);
         }
     };
 
@@ -110,9 +117,11 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         match uploads.get(&upload_id) {
             Some(e) if e.key == key => e.clone(),
             Some(_) => {
-                return err_invalid_argument("The upload ID is not associated with this key.");
+                return s3_error(S3ErrorKind::InvalidArgument(
+                    "The upload ID is not associated with this key.",
+                ));
             }
-            None => return err_no_such_upload(),
+            None => return s3_error(S3ErrorKind::NoSuchUpload),
         }
     };
 
@@ -121,7 +130,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
     for cp in &request.parts {
         match upload_entry.parts.get(&cp.part_number) {
             Some(pe) if pe.etag == cp.etag => ordered_parts.push((cp.part_number, pe.clone())),
-            Some(_) | None => return err_invalid_part(),
+            Some(_) | None => return s3_error(S3ErrorKind::InvalidPart),
         }
     }
     ordered_parts.sort_by_key(|(n, _)| *n);
@@ -130,7 +139,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
     let serve_dir = state.store.read().await.serve_dir().to_owned();
     let rel_path = match crate::handlers::put_object::sanitize_key(&key) {
         Some(p) => p,
-        None => return err_invalid_argument("The specified object key is invalid."),
+        None => return s3_error(S3ErrorKind::InvalidArgument("The specified object key is invalid.")),
     };
     let abs_path = serve_dir.join(&rel_path);
 
@@ -147,7 +156,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         Err(e) => {
             warn!("Failed to assemble parts: {}", e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
     };
 
@@ -173,7 +182,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
             warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
 
         metadata_cache::save_metadata_cache(&serve_dir, &rel_path, &object_metadata).await;
@@ -209,7 +218,7 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         Ok(b) => b,
         Err(e) => {
             warn!("XML serialise error: {}", e);
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
     };
 
@@ -223,19 +232,16 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
 }
 
 /// Collect all body frames into a single byte buffer.
-async fn collect_body(body: Body) -> std::io::Result<Bytes> {
+async fn collect_body(body: Body) -> io::Result<Bytes> {
     body.collect()
         .await
         .map(|c| c.to_bytes())
-        .map_err(|e| std::io::Error::other(e.to_string()))
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 /// Concatenate part files into `dst`, computing the final S3 multipart ETag.
 /// Returns `(total_bytes, etag, md5_hex, mtime)`.
-async fn assemble_parts(
-    parts: &[(u32, crate::multipart_state::PartEntry)],
-    dst: &std::path::Path,
-) -> std::io::Result<(u64, String, String, SystemTime)> {
+async fn assemble_parts(parts: &[(u32, PartEntry)], dst: &FsPath) -> io::Result<(u64, String, String, SystemTime)> {
     let mut file = tokio::fs::File::create(dst).await?;
     let mut md5_hasher = Md5::new();
     let mut total: u64 = 0;
@@ -279,8 +285,10 @@ pub(crate) async fn abort_multipart_upload(state: AppState, key: String, upload_
         Some(entry) => {
             // Key mismatch - re-insert the entry and return error
             uploads.insert(upload_id, entry);
-            err_invalid_argument("The upload ID is not associated with this key.")
+            s3_error(S3ErrorKind::InvalidArgument(
+                "The upload ID is not associated with this key.",
+            ))
         }
-        None => err_no_such_upload(),
+        None => s3_error(S3ErrorKind::NoSuchUpload),
     }
 }

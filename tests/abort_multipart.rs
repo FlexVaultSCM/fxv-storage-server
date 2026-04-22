@@ -1,31 +1,18 @@
 /// Integration tests for AbortMultipartUpload (Stage 5).
-use std::net::SocketAddr;
-use std::path::PathBuf;
+mod common;
+#[path = "common/xml.rs"]
+mod xml;
 
-async fn spawn_server(serve_dir: PathBuf) -> String {
-    let store = fxv_storage_server::store::build_shared_store(&serve_dir)
-        .await
-        .expect("build store");
-    let app = fxv_storage_server::build_app(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    format!("http://{}", addr)
-}
-
-fn parse_upload_id(xml: &str) -> String {
-    let start = xml.find("<UploadId>").expect("UploadId tag") + "<UploadId>".len();
-    let end = xml.find("</UploadId>").expect("/UploadId tag");
-    xml[start..end].to_owned()
-}
+// == Internal
+use common::spawn_server;
+use xml::parse_xml_tag;
 
 /// Abort a multipart upload: should return 204 and clean up part temp files.
 #[tokio::test]
 async fn test_abort_multipart_upload_204() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     // Create upload
@@ -35,7 +22,7 @@ async fn test_abort_multipart_upload_204() {
         .await
         .expect("create");
     assert_eq!(create_resp.status(), 200);
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     // Upload a part
     client
@@ -69,7 +56,8 @@ async fn test_abort_multipart_upload_204() {
 #[tokio::test]
 async fn test_abort_nonexistent_upload_404() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let resp = client
@@ -84,7 +72,8 @@ async fn test_abort_nonexistent_upload_404() {
 #[tokio::test]
 async fn test_delete_without_upload_id_does_not_abort_upload() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let create_resp = client
@@ -92,7 +81,7 @@ async fn test_delete_without_upload_id_does_not_abort_upload() {
         .send()
         .await
         .expect("create");
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     let part_resp = client
         .put(format!("{}/file.bin?partNumber=1&uploadId={}", base, upload_id))
@@ -133,7 +122,8 @@ async fn test_delete_without_upload_id_does_not_abort_upload() {
 #[tokio::test]
 async fn test_abort_does_not_create_file() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let create_resp = client
@@ -141,7 +131,7 @@ async fn test_abort_does_not_create_file() {
         .send()
         .await
         .expect("create");
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     client
         .put(format!("{}/ghost.bin?partNumber=1&uploadId={}", base, upload_id))

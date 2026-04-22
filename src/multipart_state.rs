@@ -1,9 +1,13 @@
 /// In-memory state for multipart uploads.
 ///
 /// Lives only for the duration of the server process; lost on restart.
-use crate::etag::Md5DigestBytes;
-use crate::metadata_cache::HeaderEntry;
+// == Std
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
+// == Internal
+use crate::{etag::Md5DigestBytes, metadata_cache::HeaderEntry};
+
+// == External
 use tokio::sync::RwLock;
 
 /// Directory name (relative to serve_dir) used for in-progress multipart part files.

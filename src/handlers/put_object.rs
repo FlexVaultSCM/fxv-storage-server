@@ -1,10 +1,20 @@
+// == Std
+use std::{
+    io,
+    path::{Component, Path as FsPath, PathBuf},
+    time::SystemTime,
+};
+
+// == Internal
 use crate::{
     AppState, etag,
     metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
     multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState},
-    s3_xml_compat::{err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed},
+    s3_xml_compat::{S3ErrorKind, s3_error},
     store::{FileEntry, SharedStore},
 };
+
+// == External
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -13,7 +23,6 @@ use axum::{
 };
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use std::{path::PathBuf, time::SystemTime};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
@@ -51,7 +60,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
     // Sanitise the key against path traversal
     let rel_path = match sanitize_key(&key) {
         Some(p) => p,
-        None => return err_invalid_argument("The specified object key is invalid."),
+        None => return s3_error(S3ErrorKind::InvalidArgument("The specified object key is invalid.")),
     };
 
     let abs_path = serve_dir.join(&rel_path);
@@ -75,12 +84,12 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         let s = store.read().await;
         let existing = s.get(&key);
         match (existing, if_match.as_deref(), if_none_match.as_deref()) {
-            (Some(_), _, Some("*")) => return err_precondition_failed(),
+            (Some(_), _, Some("*")) => return s3_error(S3ErrorKind::PreconditionFailed),
             (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
-                return err_precondition_failed();
+                return s3_error(S3ErrorKind::PreconditionFailed);
             }
             (Some(_), Some(_), _) => {}
-            (None, Some(_), _) => return err_precondition_failed(),
+            (None, Some(_), _) => return s3_error(S3ErrorKind::PreconditionFailed),
             _ => {}
         }
     }
@@ -107,7 +116,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         Err(e) => {
             warn!("Failed to write temp file {:?}: {}", tmp_path, e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
     };
 
@@ -141,15 +150,15 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         match (existing, if_match.as_deref(), if_none_match.as_deref()) {
             (Some(_), _, Some("*")) => {
                 let _ = tokio::fs::remove_file(&tmp_path).await;
-                return err_precondition_failed();
+                return s3_error(S3ErrorKind::PreconditionFailed);
             }
             (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
                 let _ = tokio::fs::remove_file(&tmp_path).await;
-                return err_precondition_failed();
+                return s3_error(S3ErrorKind::PreconditionFailed);
             }
             (None, Some(_), _) => {
                 let _ = tokio::fs::remove_file(&tmp_path).await;
-                return err_precondition_failed();
+                return s3_error(S3ErrorKind::PreconditionFailed);
             }
             _ => {}
         }
@@ -158,7 +167,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
             warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
 
         // Persist object metadata to the disk cache. Safe to use tokio::fs::write here
@@ -192,11 +201,11 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
 async fn upload_part(state: AppState, key: String, params: PutParams, body: Body) -> Response {
     let part_number = match params.part_number {
         Some(n) if (1..=10_000).contains(&n) => n,
-        _ => return err_invalid_argument("Part number must be between 1 and 10000."),
+        _ => return s3_error(S3ErrorKind::InvalidArgument("Part number must be between 1 and 10000.")),
     };
     let upload_id = match params.upload_id {
         Some(id) => id,
-        None => return err_invalid_argument("A valid uploadId must be provided."),
+        None => return s3_error(S3ErrorKind::InvalidArgument("A valid uploadId must be provided.")),
     };
 
     // Verify the upload exists and targets this key
@@ -205,9 +214,11 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
         match uploads.get(&upload_id) {
             Some(entry) if entry.key == key => {}
             Some(_) => {
-                return err_invalid_argument("The upload ID is not associated with this key.");
+                return s3_error(S3ErrorKind::InvalidArgument(
+                    "The upload ID is not associated with this key.",
+                ));
             }
-            None => return err_no_such_upload(),
+            None => return s3_error(S3ErrorKind::NoSuchUpload),
         }
     }
 
@@ -223,7 +234,7 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
         Err(e) => {
             warn!("Failed to write part temp file {:?}: {}", tmp_path, e);
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
     };
 
@@ -262,9 +273,9 @@ pub(crate) type Uploads = SharedUploadState;
 /// Stream `body` into `tmp_path`, computing MD5 and capturing metadata.
 /// Returns `(file_size, etag, digest_bytes, modified_time)`.
 async fn write_body_to_temp(
-    tmp_path: &std::path::Path,
+    tmp_path: &FsPath,
     body: Body,
-) -> std::io::Result<(u64, String, etag::Md5DigestBytes, SystemTime)> {
+) -> io::Result<(u64, String, etag::Md5DigestBytes, SystemTime)> {
     use http_body_util::BodyExt;
 
     let mut file = tokio::fs::File::create(tmp_path).await?;
@@ -273,7 +284,7 @@ async fn write_body_to_temp(
 
     let mut body = body;
     while let Some(chunk) = body.frame().await {
-        let frame = chunk.map_err(|e| std::io::Error::other(e.to_string()))?;
+        let frame = chunk.map_err(|e| io::Error::other(e.to_string()))?;
         if let Ok(data) = frame.into_data() {
             hasher.update(&data);
             total_bytes += data.len() as u64;
@@ -295,8 +306,6 @@ async fn write_body_to_temp(
 /// Validate a key string and return a `PathBuf` that is safe to join with the serve directory.
 /// Returns `None` if the key contains path traversal components.
 pub fn sanitize_key(key: &str) -> Option<PathBuf> {
-    use std::path::Component;
-
     let p = PathBuf::from(key.trim_start_matches('/'));
     for component in p.components() {
         match component {
@@ -316,6 +325,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_key_valid() {
+        // Verify normal relative object keys are accepted.
         assert!(sanitize_key("a/b/c.txt").is_some());
         assert!(sanitize_key("file.txt").is_some());
         assert!(sanitize_key("deep/nested/path/file.bin").is_some());
@@ -323,14 +333,17 @@ mod tests {
 
     #[test]
     fn test_sanitize_key_traversal_rejected() {
+        // Verify traversal attempts are rejected.
         assert!(sanitize_key("../secret").is_none());
         assert!(sanitize_key("a/../../etc/passwd").is_none());
-        // Leading slash is stripped, so "/absolute" becomes "absolute" which is valid
+
+        // Verify a leading slash is normalized away before validation.
         assert!(sanitize_key("/absolute").is_some());
     }
 
     #[test]
     fn test_sanitize_key_empty_rejected() {
+        // Verify empty keys are rejected after trimming leading slashes.
         assert!(sanitize_key("").is_none());
         assert!(sanitize_key("/").is_none());
     }

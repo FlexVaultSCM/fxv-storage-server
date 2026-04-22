@@ -12,30 +12,20 @@
 /// captured as the key and the file lands at `<serve_dir>/BUCKET/key`.
 /// That is intentional - this test validates wire-level compatibility,
 /// not bucket semantics.
-use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials, Region};
+mod common;
+
+// == Internal
+use common::spawn_server;
+
+// == External
 use aws_sdk_s3::{
     Client,
+    config::{Builder as S3ConfigBuilder, Credentials, Region},
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart},
 };
-use std::{net::SocketAddr, path::PathBuf};
 
 const BUCKET: &str = "test-bucket";
-
-// == helpers
-
-async fn spawn_server(serve_dir: PathBuf) -> String {
-    let store = fxv_storage_server::store::build_shared_store(&serve_dir)
-        .await
-        .expect("build store");
-    let app = fxv_storage_server::build_app(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    format!("http://{}", addr)
-}
 
 fn s3_client(endpoint_url: &str) -> Client {
     let creds = Credentials::new("test-access-key", "test-secret-key", None, None, "static");
@@ -54,7 +44,8 @@ fn s3_client(endpoint_url: &str) -> Client {
 #[tokio::test]
 async fn s3_put_object_and_get_object() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     // PutObject
@@ -92,7 +83,8 @@ async fn s3_put_object_and_get_object() {
 #[tokio::test]
 async fn s3_delete_object_round_trip() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     client
@@ -122,7 +114,8 @@ async fn s3_delete_object_round_trip() {
 #[tokio::test]
 async fn s3_get_object_not_found() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     let result = client.get_object().bucket(BUCKET).key("nonexistent.txt").send().await;
@@ -138,7 +131,8 @@ async fn s3_get_object_not_found() {
 #[tokio::test]
 async fn s3_get_object_if_none_match_304() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     // Upload the object
@@ -187,7 +181,8 @@ async fn s3_get_object_if_none_match_304() {
 #[tokio::test]
 async fn s3_get_object_range() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     client
@@ -218,7 +213,8 @@ async fn s3_get_object_range() {
 #[tokio::test]
 async fn s3_put_object_if_none_match_star_prevents_overwrite() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     // First write succeeds
@@ -256,7 +252,8 @@ async fn s3_put_object_if_none_match_star_prevents_overwrite() {
 #[tokio::test]
 async fn s3_multipart_upload_full_flow() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     // 1. CreateMultipartUpload
@@ -340,7 +337,8 @@ async fn s3_multipart_upload_full_flow() {
 #[tokio::test]
 async fn s3_abort_multipart_upload() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = s3_client(&base);
 
     // Create upload

@@ -1,13 +1,20 @@
-use crate::{errors, metadata_cache, server, store::SharedStore};
+// == Std
 use std::{
-    fmt,
+    error, fmt,
+    future::Future,
+    io,
     net::SocketAddr,
     ops::Range,
-    path::{self, PathBuf},
+    path::{Path, PathBuf},
     sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
+
+// == Internal
+use crate::{errors, metadata_cache, server, store::SharedStore};
+
+// == External
 use tokio::{runtime::Runtime, sync::Notify};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -48,33 +55,40 @@ impl fmt::Display for TestServerError {
     }
 }
 
-impl std::error::Error for TestServerError {}
+impl error::Error for TestServerError {}
 
 impl TestServer {
-    pub fn new(serve_dir: &path::Path, start_port: u16) -> Result<Self, TestServerError> {
+    /// Start a server within a default port window beginning at `start_port`.
+    pub fn new(serve_dir: &Path, start_port: u16) -> Result<Self, TestServerError> {
         Self::new_with_port_range(serve_dir, start_port..start_port + DEFAULT_PORT_WINDOW)
     }
 
-    pub fn new_ephemeral(serve_dir: &path::Path) -> Result<Self, TestServerError> {
+    /// Start a server on an ephemeral localhost port.
+    pub fn new_ephemeral(serve_dir: &Path) -> Result<Self, TestServerError> {
         Self::start(serve_dir, BindStrategy::Ephemeral)
     }
 
-    pub fn new_with_port_range(serve_dir: &path::Path, port_range: Range<u16>) -> Result<Self, TestServerError> {
+    /// Start a server on the first available port in `port_range`.
+    pub fn new_with_port_range(serve_dir: &Path, port_range: Range<u16>) -> Result<Self, TestServerError> {
         Self::start(serve_dir, BindStrategy::PortRange(port_range))
     }
 
+    /// Return the bound local socket address.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
+    /// Return the bound local TCP port.
     pub fn port(&self) -> u16 {
         self.local_addr.port()
     }
 
+    /// Return the base URL for this server.
     pub fn url(&self) -> String {
         format!("http://{}", self.local_addr)
     }
 
+    /// Add or replace a server-controlled custom header for an indexed object.
     pub fn add_custom_header(&self, path: &str, key: &str, value: &str) -> Result<(), TestServerError> {
         let rel_path = crate::handlers::put_object::sanitize_key(path)
             .ok_or_else(|| invalid_input_error("The specified object key is invalid."))
@@ -90,12 +104,7 @@ impl TestServer {
             let existing = store
                 .get(&object_key)
                 .cloned()
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("object '{}' not found", object_key),
-                    )
-                })
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("object '{}' not found", object_key)))
                 .map_err(errors::Error::from)?;
             let mut custom_headers = existing.custom_headers.clone();
             metadata_cache::upsert_custom_header(&mut custom_headers, &key, &value)?;
@@ -120,7 +129,7 @@ impl TestServer {
         .map_err(TestServerError::Operation)
     }
 
-    fn start(serve_dir: &path::Path, bind_strategy: BindStrategy) -> Result<Self, TestServerError> {
+    fn start(serve_dir: &Path, bind_strategy: BindStrategy) -> Result<Self, TestServerError> {
         let serve_dir = serve_dir.to_path_buf();
         let serve_dir_for_thread = serve_dir.clone();
         let shutdown = Arc::new(Notify::new());
@@ -214,13 +223,13 @@ async fn bind_first_available_port(port_range: Range<u16>) -> errors::Result<tok
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => return Ok(listener),
-            Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {}
+            Err(err) if err.kind() == io::ErrorKind::AddrInUse => {}
             Err(err) => return Err(err.into()),
         }
     }
 
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AddrNotAvailable,
+    Err(io::Error::new(
+        io::ErrorKind::AddrNotAvailable,
         format!(
             "failed to bind fxv-storage-server on any port in range [{}..{})",
             port_range.start, port_range.end
@@ -234,7 +243,7 @@ struct StartupSuccess {
     store: SharedStore,
 }
 
-fn rel_path_to_key(rel_path: &path::Path) -> String {
+fn rel_path_to_key(rel_path: &Path) -> String {
     rel_path
         .components()
         .map(|component| component.as_os_str().to_string_lossy())
@@ -243,18 +252,18 @@ fn rel_path_to_key(rel_path: &path::Path) -> String {
 }
 
 fn invalid_input_error(message: &str) -> errors::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidInput, message).into()
+    io::Error::new(io::ErrorKind::InvalidInput, message).into()
 }
 
 fn block_on_result<F, T>(future: F) -> errors::Result<T>
 where
-    F: std::future::Future<Output = errors::Result<T>> + Send + 'static,
+    F: Future<Output = errors::Result<T>> + Send + 'static,
     T: Send + 'static,
 {
     if tokio::runtime::Handle::try_current().is_ok() {
         thread::spawn(move || Runtime::new()?.block_on(future))
             .join()
-            .map_err(|_| errors::Error::from(std::io::Error::other("metadata helper thread panicked")))?
+            .map_err(|_| errors::Error::from(io::Error::other("metadata helper thread panicked")))?
     } else {
         Runtime::new()?.block_on(future)
     }
@@ -263,28 +272,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, net::TcpStream, time::Instant};
+    use std::{fs, net::TcpStream, thread, time::Instant};
 
     #[test]
     fn test_blocking_server_serves_file() {
+        // Create a serve directory containing one readable object.
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(dir.path().join("hello.txt"), b"hello world").expect("write");
 
+        // Start the blocking test server and request the object through HTTP.
         let server = TestServer::new_ephemeral(dir.path()).expect("start server");
         let response = reqwest::blocking::get(format!("{}/hello.txt", server.url())).expect("request");
 
+        // Verify the response status and body match the on-disk file.
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.text().expect("body"), "hello world");
     }
 
     #[test]
     fn test_port_range_constructor_uses_requested_range() {
+        // Create a serve directory containing one readable object.
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(dir.path().join("hello.txt"), b"hello world").expect("write");
 
+        // Start the server inside a constrained port range.
         let range = 44100..44110;
         let server = TestServer::new_with_port_range(dir.path(), range.clone()).expect("start");
 
+        // Verify the chosen port and request handling both stay within that range.
         assert!(range.contains(&server.port()));
         let response = reqwest::blocking::get(format!("{}/hello.txt", server.url())).expect("request");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -292,13 +307,16 @@ mod tests {
 
     #[test]
     fn test_drop_shuts_server_down() {
+        // Create a serve directory and start an embedded server.
         let dir = tempfile::tempdir().expect("tempdir");
         fs::write(dir.path().join("hello.txt"), b"hello world").expect("write");
 
+        // Drop the server handle after capturing its bound address.
         let server = TestServer::new_ephemeral(dir.path()).expect("start");
         let addr = server.local_addr();
         drop(server);
 
+        // Poll until the socket stops accepting new connections.
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if TcpStream::connect(addr).is_err() {
@@ -308,14 +326,16 @@ mod tests {
                 Instant::now() < deadline,
                 "server still accepting connections after Drop"
             );
-            std::thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
     #[test]
     fn test_startup_error_propagates_to_sync_caller() {
+        // Point the server at a directory that does not exist.
         let missing_dir = tempfile::tempdir().expect("tempdir").path().join("missing");
 
+        // Verify startup surfaces the background failure synchronously.
         let result = TestServer::new_ephemeral(&missing_dir);
         assert!(matches!(result, Err(TestServerError::Startup(_))));
     }

@@ -215,10 +215,15 @@ or emphasis.
 - Use `tracing` for logging. Keep `tracing`, `tracing-subscriber`, and `tracing-appender`
   version-pinned together in `Cargo.toml` (they must stay in sync).
 - **Before adding any new dependency to `Cargo.toml`, pause and ask for confirmation.**
+- Add at least brief rustdoc to every public function.
 - Factor logic so it can be unit-tested without spinning up a full stack (see `conditional.rs`,
   `range.rs`, `store.rs`, `etag.rs`, `handlers/put_object.rs::sanitize_key`).
 - Include integration tests (in `tests/`) for each feature that do spin up the full stack.
 - All unit test modules must be inside a `mod tests` block gated by `#[cfg(test)]`.
+- Prefer parent-module imports over inline `std::...` qualifications: e.g. `use std::fs;` then
+  `fs::write(...)`.
+- Group imports into explicit sections when present: `// == Std`, `// == Internal`, and
+  `// == External`.
 
 ### Code Quality (enforce before every commit)
 

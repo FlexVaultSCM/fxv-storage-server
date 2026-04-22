@@ -1,8 +1,14 @@
+// == Std
+use std::io;
+
+// == Internal
 use crate::{
     AppState, metadata_cache,
-    s3_xml_compat::{err_internal, err_invalid_argument},
+    s3_xml_compat::{S3ErrorKind, s3_error},
     store::SharedStore,
 };
+
+// == External
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -36,7 +42,7 @@ pub async fn delete_dispatch(
 async fn delete_object(store: SharedStore, key: String) -> Response {
     let rel_path = match crate::handlers::put_object::sanitize_key(&key) {
         Some(path) => path,
-        None => return err_invalid_argument("The specified object key is invalid."),
+        None => return s3_error(S3ErrorKind::InvalidArgument("The specified object key is invalid.")),
     };
 
     let mut store = store.write().await;
@@ -45,15 +51,15 @@ async fn delete_object(store: SharedStore, key: String) -> Response {
 
     match tokio::fs::remove_file(&abs_path).await {
         Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => {
             warn!("DeleteObject remove {:?} failed: {}", abs_path, e);
-            return err_internal();
+            return s3_error(S3ErrorKind::Internal);
         }
     }
 
     if let Err(e) = metadata_cache::remove_metadata_cache(&serve_dir, &rel_path).await
-        && e.kind() != std::io::ErrorKind::NotFound
+        && e.kind() != io::ErrorKind::NotFound
     {
         warn!("DeleteObject metadata cleanup for {:?} failed: {}", rel_path, e);
     }

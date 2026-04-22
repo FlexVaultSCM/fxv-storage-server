@@ -1,6 +1,11 @@
-use clap::Parser;
+// == Std
+use std::{future, path::PathBuf, process};
+
+// == Internal
 use fxv_storage_server::{config::Config, server};
-use std::path::PathBuf;
+
+// == External
+use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -30,7 +35,7 @@ async fn main() {
 
     let serve_dir = cli.serve_dir.canonicalize().unwrap_or_else(|e| {
         eprintln!("Cannot resolve serve-dir '{}': {}", cli.serve_dir.display(), e);
-        std::process::exit(1);
+        process::exit(1);
     });
 
     let config = Config {
@@ -38,10 +43,10 @@ async fn main() {
         port: cli.port,
     };
 
-    server::run_with_shutdown(&config, std::future::pending())
+    server::run_with_shutdown(&config, future::pending())
         .await
         .unwrap_or_else(|e| {
             eprintln!("Server failed: {}", e);
-            std::process::exit(1);
+            process::exit(1);
         });
 }

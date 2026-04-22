@@ -1,14 +1,21 @@
-use crate::{build_app, config::Config, errors::Result, store};
-use axum::{Router, serve::ListenerExt as _};
+// == Std
 use std::{future::Future, net::SocketAddr, path::Path};
+
+// == Internal
+use crate::{build_app, config::Config, errors::Result, store};
+
+// == External
+use axum::{Router, serve::ListenerExt as _};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
+/// Build the shared file index for a serve directory.
 pub async fn build_store_for_dir(serve_dir: &Path) -> Result<store::SharedStore> {
     info!("Building file index from {:?}", serve_dir);
     store::build_shared_store(serve_dir).await
 }
 
+/// Build the application router around an existing shared store.
 pub fn build_app_from_store(shared_store: store::SharedStore) -> Router {
     build_app(shared_store)
 }

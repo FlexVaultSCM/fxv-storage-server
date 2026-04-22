@@ -12,12 +12,15 @@ pub mod server;
 pub mod store;
 pub mod test_server;
 
-use axum::Router;
+// == Internal
 use handlers::{
     delete_object::delete_dispatch, get_object::get_object, multipart::post_dispatch, put_object::put_dispatch,
 };
 use multipart_state::{SharedUploadState, new_shared_upload_state};
 use store::SharedStore;
+
+// == External
+use axum::Router;
 
 /// Combined application state threaded through all handlers.
 #[derive(Clone)]

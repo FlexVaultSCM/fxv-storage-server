@@ -1,9 +1,15 @@
+// == Std
+use std::{io::SeekFrom, time::SystemTime};
+
+// == Internal
 use crate::{
     AppState,
     conditional::{self, ConditionalResult},
     metadata_cache, range,
-    s3_xml_compat::{err_internal, err_invalid_range, err_no_such_key, err_precondition_failed},
+    s3_xml_compat::{S3ErrorKind, s3_error},
 };
+
+// == External
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -18,7 +24,7 @@ pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, 
     let store = state.store.read().await;
     let entry = match store.get(&key) {
         Some(e) => e.clone(),
-        None => return err_no_such_key(),
+        None => return s3_error(S3ErrorKind::NoSuchKey),
     };
 
     // Parse conditional headers
@@ -65,7 +71,7 @@ pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, 
                 &entry,
             );
         }
-        ConditionalResult::PreconditionFailed => return err_precondition_failed(),
+        ConditionalResult::PreconditionFailed => return s3_error(S3ErrorKind::PreconditionFailed),
         ConditionalResult::Proceed => {}
     }
 
@@ -74,7 +80,7 @@ pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, 
         Ok(r) => r,
         Err(_) => {
             // 416 Range Not Satisfiable - include Content-Range: bytes */size per RFC 7233
-            let mut resp = err_invalid_range();
+            let mut resp = s3_error(S3ErrorKind::InvalidRange);
             resp.headers_mut().insert(
                 header::CONTENT_RANGE,
                 format!("bytes */{}", entry.size).parse().expect("content-range"),
@@ -86,7 +92,7 @@ pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, 
     // Open the file
     let mut file = match tokio::fs::File::open(&entry.abs_path).await {
         Ok(f) => f,
-        Err(_) => return err_internal(),
+        Err(_) => return s3_error(S3ErrorKind::Internal),
     };
 
     let last_modified_str = fmt_http_date(entry.modified);
@@ -115,8 +121,8 @@ pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, 
                 "GET {} -> 206 (bytes {}-{}/{})",
                 key, range.start, range.end, entry.size
             );
-            if file.seek(std::io::SeekFrom::Start(range.start)).await.is_err() {
-                return err_internal();
+            if file.seek(SeekFrom::Start(range.start)).await.is_err() {
+                return s3_error(S3ErrorKind::Internal);
             }
             let limited = tokio::io::AsyncReadExt::take(file, range.len());
             let stream = tokio_util::io::ReaderStream::new(limited);
@@ -143,11 +149,11 @@ fn with_custom_headers(mut response: Response, entry: &crate::store::FileEntry) 
 }
 
 /// Parse an HTTP-date string (RFC 7231 / RFC 1123) into a `SystemTime`.
-fn parse_http_date(s: &str) -> Option<std::time::SystemTime> {
+fn parse_http_date(s: &str) -> Option<SystemTime> {
     httpdate::parse_http_date(s).ok()
 }
 
 /// Format a `SystemTime` as an HTTP-date string.
-pub fn fmt_http_date(t: std::time::SystemTime) -> String {
+pub fn fmt_http_date(t: SystemTime) -> String {
     httpdate::fmt_http_date(t)
 }

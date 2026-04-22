@@ -1,8 +1,14 @@
-use crate::errors::*;
-use md5::{Digest, Md5};
+// == Std
 use std::path::Path;
+
+// == Internal
+use crate::errors::*;
+
+// == External
+use md5::{Digest, Md5};
 use tokio::io::AsyncReadExt;
 
+/// Raw MD5 digest bytes used for ETag and checksum calculations.
 pub type Md5DigestBytes = [u8; 16];
 
 /// Compute an MD5 ETag for the given file path by streaming its contents.
@@ -67,37 +73,52 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_compute_etag_deterministic() {
+        // Create a file with stable contents to hash.
         let dir = TempDir::new().expect("tempdir");
         let file = dir.path().join("test.bin");
-        std::fs::write(&file, b"hello world").expect("write");
+        fs::write(&file, b"hello world").expect("write");
 
+        // Compute the ETag twice to prove the result is deterministic.
         let etag1 = compute_file_etag(&file).await.expect("etag1");
         let etag2 = compute_file_etag(&file).await.expect("etag2");
+
+        // Verify the MD5-backed wire-format ETag matches the expected value.
         assert_eq!(etag1, etag2);
         assert_eq!(etag1, "\"5eb63bbbe01eeed093cb22bb8f5acdc3\"");
     }
 
     #[tokio::test]
     async fn test_compute_etag_differs_for_different_content() {
+        // Create two files with distinct contents.
         let dir = TempDir::new().expect("tempdir");
         let a = dir.path().join("a.bin");
         let b = dir.path().join("b.bin");
-        std::fs::write(&a, b"content A").expect("write a");
-        std::fs::write(&b, b"content B").expect("write b");
+        fs::write(&a, b"content A").expect("write a");
+        fs::write(&b, b"content B").expect("write b");
+
+        // Compute ETags for both files independently.
         let etag_a = compute_file_etag(&a).await.expect("etag_a");
         let etag_b = compute_file_etag(&b).await.expect("etag_b");
+
+        // Verify the content difference produces different ETags.
         assert_ne!(etag_a, etag_b);
     }
 
     #[test]
     fn test_multipart_etag_from_part_digests_matches_s3_shape() {
+        // Build two fake part digests for a multipart upload.
         let part1 = [0u8; 16];
         let part2 = [1u8; 16];
+
+        // Compute the final multipart ETag string.
         let etag = multipart_etag_from_part_digests(&[part1, part2]);
+
+        // Verify the output uses the quoted `<md5>-<count>` S3 shape.
         assert!(etag.starts_with('"'));
         assert!(etag.ends_with('"'));
         assert!(etag.contains("-2"));
@@ -105,11 +126,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_compute_file_md5_hex() {
+        // Create a file with known contents.
         let dir = TempDir::new().expect("tempdir");
         let file = dir.path().join("test.bin");
-        std::fs::write(&file, b"hello world").expect("write");
+        fs::write(&file, b"hello world").expect("write");
 
+        // Compute the raw MD5 checksum without ETag quoting.
         let md5_hex = compute_file_md5_hex(&file).await.expect("md5");
+
+        // Verify the checksum matches the expected lowercase hex digest.
         assert_eq!(md5_hex, "5eb63bbbe01eeed093cb22bb8f5acdc3");
     }
 }

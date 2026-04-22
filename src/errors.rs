@@ -1,9 +1,13 @@
+// == Std
+use std::{io, path};
+
+// == External
 use error_chain::error_chain;
 
 error_chain! {
     foreign_links {
-        Io(std::io::Error);
-        StripPrefix(std::path::StripPrefixError);
+        Io(io::Error);
+        StripPrefix(path::StripPrefixError);
     }
 
     errors {

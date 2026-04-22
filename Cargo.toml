@@ -64,3 +64,4 @@ aws-config = { version = "1", default-features = false }
 [lints.rust]
 # error_chain uses a custom cfg that isn't declared via check-cfg; suppress the warning
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(has_error_description_deprecated)'] }
+unused_qualifications = "warn"

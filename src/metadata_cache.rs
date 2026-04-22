@@ -1,10 +1,16 @@
-use crate::{errors::*, etag};
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
-use serde::{Deserialize, Serialize};
+// == Std
 use std::{
+    io,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+// == Internal
+use crate::{errors::*, etag};
+
+// == External
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 pub const METADATA_CACHE_DIR: &str = ".fxv-metadata-cache";
@@ -37,6 +43,7 @@ pub struct ObjectMetadataCache {
 }
 
 impl ObjectMetadataCache {
+    /// Build a cache record from the current on-disk object state.
     pub fn from_current_state(
         modified: SystemTime,
         etag: String,
@@ -66,14 +73,17 @@ fn cache_path(serve_dir: &Path, rel_path: &Path) -> PathBuf {
     cache_file
 }
 
+/// Convert a `SystemTime` into whole seconds since the Unix epoch.
 pub fn system_time_to_secs(time: SystemTime) -> i64 {
     time.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-pub async fn remove_metadata_cache(serve_dir: &Path, rel_path: &Path) -> std::io::Result<()> {
+/// Remove the metadata cache entry for an object if it exists.
+pub async fn remove_metadata_cache(serve_dir: &Path, rel_path: &Path) -> io::Result<()> {
     tokio::fs::remove_file(cache_path(serve_dir, rel_path)).await
 }
 
+/// Persist object metadata to the on-disk JSON cache.
 pub async fn save_metadata_cache(serve_dir: &Path, rel_path: &Path, metadata: &ObjectMetadataCache) {
     let cache_file = cache_path(serve_dir, rel_path);
     if let Some(parent) = cache_file.parent()
@@ -108,6 +118,7 @@ async fn load_metadata_cache(serve_dir: &Path, rel_path: &Path, file_mtime_secs:
     }
 }
 
+/// Load cached metadata for an object or compute and persist a fresh record.
 pub async fn get_or_compute_metadata(serve_dir: &Path, rel_path: &Path) -> Result<ObjectMetadataCache> {
     let abs_path = serve_dir.join(rel_path);
     let meta = tokio::fs::metadata(&abs_path).await?;
@@ -136,6 +147,7 @@ pub async fn get_or_compute_metadata(serve_dir: &Path, rel_path: &Path) -> Resul
     Ok(metadata)
 }
 
+/// Extract remote-user-controlled `x-amz-meta-*` headers from a request.
 pub fn extract_user_metadata_headers(headers: &HeaderMap) -> Vec<HeaderEntry> {
     headers
         .iter()
@@ -149,16 +161,17 @@ pub fn extract_user_metadata_headers(headers: &HeaderMap) -> Vec<HeaderEntry> {
         .collect()
 }
 
+/// Validate a cached header key/value pair before persisting it.
 pub fn validate_header_entry(key: &str, value: &str) -> Result<HeaderEntry> {
     HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
             format!("invalid header name '{}': {}", key, e),
         )
     })?;
     HeaderValue::from_str(value).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
             format!("invalid header value for '{}': {}", key, e),
         )
     })?;
@@ -169,6 +182,7 @@ pub fn validate_header_entry(key: &str, value: &str) -> Result<HeaderEntry> {
     })
 }
 
+/// Insert or replace a custom header entry using case-insensitive key matching.
 pub fn upsert_custom_header(custom_headers: &mut Vec<HeaderEntry>, key: &str, value: &str) -> Result<()> {
     let entry = validate_header_entry(key, value)?;
     if let Some(existing) = custom_headers
@@ -182,6 +196,7 @@ pub fn upsert_custom_header(custom_headers: &mut Vec<HeaderEntry>, key: &str, va
     Ok(())
 }
 
+/// Replay cached custom headers onto an outgoing response.
 pub fn apply_custom_headers(headers: &mut HeaderMap, custom_headers: &[HeaderEntry]) {
     for header in custom_headers {
         let key = match HeaderName::from_bytes(header.key.as_bytes()) {
@@ -205,14 +220,16 @@ pub fn apply_custom_headers(headers: &mut HeaderMap, custom_headers: &[HeaderEnt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_metadata_cache_round_trip() {
+        // Build a representative metadata record with checksums and headers.
         let dir = TempDir::new().expect("tempdir");
         let rel = Path::new("sub/file.txt");
         let metadata = ObjectMetadataCache::from_current_state(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(123),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(123),
             "\"abc\"".to_owned(),
             ChecksumSet {
                 md5: "deadbeef".to_owned(),
@@ -225,19 +242,26 @@ mod tests {
             }],
         );
 
+        // Persist the metadata and load it back through the cache reader.
         save_metadata_cache(dir.path(), rel, &metadata).await;
         let loaded = load_metadata_cache(dir.path(), rel, 123).await.expect("load");
+
+        // Verify the cached JSON round-trips without losing fields.
         assert_eq!(loaded, metadata);
     }
 
     #[test]
     fn test_upsert_custom_header_replaces_case_insensitively() {
+        // Seed the header list with one existing entry.
         let mut headers = vec![HeaderEntry {
             key: "Content-Type".to_owned(),
             value: "text/plain".to_owned(),
         }];
 
+        // Upsert the same header using different casing.
         upsert_custom_header(&mut headers, "content-type", "application/json").expect("upsert");
+
+        // Verify the original entry was replaced instead of duplicated.
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].value, "application/json");
     }

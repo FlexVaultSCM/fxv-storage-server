@@ -2,27 +2,13 @@
 ///
 /// Spins up a full fxv-storage-server instance and tests PUT operations,
 /// including conditional headers and path traversal rejection.
-use std::net::SocketAddr;
-use std::path::PathBuf;
+mod common;
 
-// == helpers
+// == Std
+use std::fs;
 
-async fn spawn_server(serve_dir: PathBuf) -> String {
-    let store = fxv_storage_server::store::build_shared_store(&serve_dir)
-        .await
-        .expect("build store");
-
-    let app = fxv_storage_server::build_app(store);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-
-    format!("http://{}", addr)
-}
+// == Internal
+use common::spawn_server;
 
 // == tests
 
@@ -30,7 +16,8 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
 #[tokio::test]
 async fn test_put_new_file_200_and_readable() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -63,8 +50,9 @@ async fn test_put_new_file_200_and_readable() {
 #[tokio::test]
 async fn test_put_overwrite_file() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("file.txt"), b"original").expect("write");
-    let base = spawn_server(dir.path().to_owned()).await;
+    fs::write(dir.path().join("file.txt"), b"original").expect("write");
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -88,8 +76,9 @@ async fn test_put_overwrite_file() {
 #[tokio::test]
 async fn test_put_if_none_match_star_412_when_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("existing.txt"), b"data").expect("write");
-    let base = spawn_server(dir.path().to_owned()).await;
+    fs::write(dir.path().join("existing.txt"), b"data").expect("write");
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -107,7 +96,8 @@ async fn test_put_if_none_match_star_412_when_exists() {
 #[tokio::test]
 async fn test_put_if_none_match_star_200_when_new() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -125,7 +115,8 @@ async fn test_put_if_none_match_star_200_when_new() {
 #[tokio::test]
 async fn test_put_if_match_correct_etag_200() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     // Upload the file first and capture its ETag
@@ -153,8 +144,9 @@ async fn test_put_if_match_correct_etag_200() {
 #[tokio::test]
 async fn test_put_if_match_wrong_etag_412() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("file.txt"), b"original").expect("write");
-    let base = spawn_server(dir.path().to_owned()).await;
+    fs::write(dir.path().join("file.txt"), b"original").expect("write");
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -172,7 +164,8 @@ async fn test_put_if_match_wrong_etag_412() {
 #[tokio::test]
 async fn test_put_if_match_nonexistent_412() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -190,8 +183,9 @@ async fn test_put_if_match_nonexistent_412() {
 #[tokio::test]
 async fn test_put_if_match_star_200() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("file.txt"), b"original").expect("write");
-    let base = spawn_server(dir.path().to_owned()).await;
+    fs::write(dir.path().join("file.txt"), b"original").expect("write");
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -209,7 +203,8 @@ async fn test_put_if_match_star_200() {
 #[tokio::test]
 async fn test_put_nested_key_creates_dirs() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -233,7 +228,8 @@ async fn test_put_nested_key_creates_dirs() {
 #[tokio::test]
 async fn test_put_persists_user_metadata_headers() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
 
     let client = reqwest::Client::new();
     let put_resp = client

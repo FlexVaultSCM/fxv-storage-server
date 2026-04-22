@@ -5,10 +5,78 @@
 ///
 /// S3 XML error response format:
 /// <https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html>
+// == Std
+use std::borrow::Cow;
+
+// == External
 use axum::{body::Body, http::StatusCode, response::Response};
 use serde::{Deserialize, Serialize};
 
 // == S3 error responses
+
+/// Predefined S3 error variants used by the HTTP handlers.
+pub enum S3ErrorKind<'a> {
+    /// The requested object key does not exist.
+    NoSuchKey,
+    /// The requested multipart upload does not exist.
+    NoSuchUpload,
+    /// The request preconditions did not hold.
+    PreconditionFailed,
+    /// The requested byte range is not satisfiable.
+    InvalidRange,
+    /// The request arguments were invalid.
+    InvalidArgument(&'a str),
+    /// One or more referenced multipart parts were invalid.
+    InvalidPart,
+    /// The supplied XML body was malformed.
+    MalformedXml,
+    /// An unexpected internal error occurred.
+    Internal,
+}
+
+impl S3ErrorKind<'_> {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::NoSuchKey | Self::NoSuchUpload => StatusCode::NOT_FOUND,
+            Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
+            Self::InvalidRange => StatusCode::RANGE_NOT_SATISFIABLE,
+            Self::InvalidArgument(_) | Self::InvalidPart | Self::MalformedXml => StatusCode::BAD_REQUEST,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::NoSuchKey => "NoSuchKey",
+            Self::NoSuchUpload => "NoSuchUpload",
+            Self::PreconditionFailed => "PreconditionFailed",
+            Self::InvalidRange => "InvalidRange",
+            Self::InvalidArgument(_) => "InvalidArgument",
+            Self::InvalidPart => "InvalidPart",
+            Self::MalformedXml => "MalformedXML",
+            Self::Internal => "InternalError",
+        }
+    }
+
+    fn message(&self) -> Cow<'_, str> {
+        match self {
+            Self::NoSuchKey => Cow::Borrowed("The specified key does not exist."),
+            Self::NoSuchUpload => Cow::Borrowed(
+                "The specified upload does not exist. The upload ID may be invalid, or the upload may have been aborted or completed.",
+            ),
+            Self::PreconditionFailed => Cow::Borrowed("At least one of the pre-conditions you specified did not hold."),
+            Self::InvalidRange => Cow::Borrowed("The requested range is not satisfiable."),
+            Self::InvalidArgument(message) => Cow::Borrowed(message),
+            Self::InvalidPart => Cow::Borrowed(
+                "One or more of the specified parts could not be found. The part may not have been uploaded, or the specified entity tag may not match the part's entity tag.",
+            ),
+            Self::MalformedXml => {
+                Cow::Borrowed("The XML you provided was not well-formed or did not validate against our schema.")
+            }
+            Self::Internal => Cow::Borrowed("We encountered an internal error. Please try again."),
+        }
+    }
+}
 
 /// Build an S3-compatible XML error `Response`.
 ///
@@ -16,66 +84,18 @@ use serde::{Deserialize, Serialize};
 /// <?xml version="1.0" encoding="UTF-8"?>
 /// <Error><Code>NoSuchKey</Code><Message>...</Message></Error>
 /// ```
-pub fn s3_error(status: StatusCode, code: &str, message: &str) -> Response {
+pub fn s3_error(kind: S3ErrorKind<'_>) -> Response {
+    let code = kind.code();
+    let message = kind.message();
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>{}</Code><Message>{}</Message></Error>"#,
         code, message
     );
     Response::builder()
-        .status(status)
+        .status(kind.status_code())
         .header("Content-Type", "application/xml")
         .body(Body::from(xml))
         .expect("build error response")
-}
-
-// Pre-defined S3 error constructors matching the standard error codes.
-pub fn err_no_such_key() -> Response {
-    s3_error(StatusCode::NOT_FOUND, "NoSuchKey", "The specified key does not exist.")
-}
-pub fn err_no_such_upload() -> Response {
-    s3_error(
-        StatusCode::NOT_FOUND,
-        "NoSuchUpload",
-        "The specified upload does not exist. The upload ID may be invalid, or the upload may have been aborted or completed.",
-    )
-}
-pub fn err_precondition_failed() -> Response {
-    s3_error(
-        StatusCode::PRECONDITION_FAILED,
-        "PreconditionFailed",
-        "At least one of the pre-conditions you specified did not hold.",
-    )
-}
-pub fn err_invalid_range() -> Response {
-    s3_error(
-        StatusCode::RANGE_NOT_SATISFIABLE,
-        "InvalidRange",
-        "The requested range is not satisfiable.",
-    )
-}
-pub fn err_invalid_argument(msg: &str) -> Response {
-    s3_error(StatusCode::BAD_REQUEST, "InvalidArgument", msg)
-}
-pub fn err_invalid_part() -> Response {
-    s3_error(
-        StatusCode::BAD_REQUEST,
-        "InvalidPart",
-        "One or more of the specified parts could not be found. The part may not have been uploaded, or the specified entity tag may not match the part's entity tag.",
-    )
-}
-pub fn err_malformed_xml() -> Response {
-    s3_error(
-        StatusCode::BAD_REQUEST,
-        "MalformedXML",
-        "The XML you provided was not well-formed or did not validate against our schema.",
-    )
-}
-pub fn err_internal() -> Response {
-    s3_error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "InternalError",
-        "We encountered an internal error. Please try again.",
-    )
 }
 
 // == CreateMultipartUpload response

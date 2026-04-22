@@ -2,39 +2,20 @@
 ///
 /// Spins up a full fxv-storage-server instance and tests the full
 /// CreateMultipartUpload -> UploadPart x N -> CompleteMultipartUpload flow.
-use fxv_storage_server::etag;
-use fxv_storage_server::multipart_state::MULTIPART_UPLOAD_DIR;
+mod common;
+#[path = "common/xml.rs"]
+mod xml;
+
+// == Std
+use std::fs;
+
+// == Internal
+use common::spawn_server;
+use xml::parse_xml_tag;
+
+// == External
+use fxv_storage_server::{etag, multipart_state::MULTIPART_UPLOAD_DIR};
 use md5::Digest;
-use std::{net::SocketAddr, path::PathBuf};
-
-// == helpers
-
-async fn spawn_server(serve_dir: PathBuf) -> String {
-    let store = fxv_storage_server::store::build_shared_store(&serve_dir)
-        .await
-        .expect("build store");
-    let app = fxv_storage_server::build_app(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr: SocketAddr = listener.local_addr().expect("local_addr");
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    format!("http://{}", addr)
-}
-
-/// Parse `<UploadId>...</UploadId>` from CreateMultipartUpload XML response.
-fn parse_upload_id(xml: &str) -> String {
-    let start = xml.find("<UploadId>").expect("UploadId tag") + "<UploadId>".len();
-    let end = xml.find("</UploadId>").expect("/UploadId tag");
-    xml[start..end].to_owned()
-}
-
-/// Parse `<ETag>...</ETag>` from CompleteMultipartUpload XML response.
-fn parse_etag_from_xml(xml: &str) -> String {
-    let start = xml.find("<ETag>").expect("ETag tag") + "<ETag>".len();
-    let end = xml.find("</ETag>").expect("/ETag tag");
-    xml[start..end].to_owned()
-}
 
 // == tests
 
@@ -42,7 +23,8 @@ fn parse_etag_from_xml(xml: &str) -> String {
 #[tokio::test]
 async fn test_multipart_full_flow() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     // 1. CreateMultipartUpload
@@ -53,7 +35,7 @@ async fn test_multipart_full_flow() {
         .expect("CreateMultipartUpload");
     assert_eq!(create_resp.status(), 200);
     let create_body = create_resp.text().await.expect("body");
-    let upload_id = parse_upload_id(&create_body);
+    let upload_id = parse_xml_tag(&create_body, "UploadId");
     assert!(!upload_id.is_empty());
 
     // 2. UploadPart 1
@@ -90,7 +72,7 @@ async fn test_multipart_full_flow() {
     let multipart_dir = dir.path().join(MULTIPART_UPLOAD_DIR);
     assert!(multipart_dir.exists(), "multipart temp dir should exist");
     assert!(
-        std::fs::read_dir(&multipart_dir)
+        fs::read_dir(&multipart_dir)
             .expect("read multipart dir")
             .next()
             .is_some(),
@@ -111,7 +93,7 @@ async fn test_multipart_full_flow() {
         .expect("CompleteMultipartUpload");
     assert_eq!(complete_resp.status(), 200);
     let complete_body = complete_resp.text().await.expect("complete body");
-    let final_etag = parse_etag_from_xml(&complete_body);
+    let final_etag = parse_xml_tag(&complete_body, "ETag");
     assert!(final_etag.starts_with('"') && final_etag.ends_with('"'));
     assert!(final_etag.contains("-2"));
 
@@ -131,7 +113,8 @@ async fn test_multipart_full_flow() {
 #[tokio::test]
 async fn test_multipart_complete_wrong_etag_400() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let create_resp = client
@@ -139,7 +122,7 @@ async fn test_multipart_complete_wrong_etag_400() {
         .send()
         .await
         .expect("create");
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     client
         .put(format!("{}/file.bin?partNumber=1&uploadId={}", base, upload_id))
@@ -148,9 +131,8 @@ async fn test_multipart_complete_wrong_etag_400() {
         .await
         .expect("upload part");
 
-    let complete_xml = format!(
-        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"00000000000000000000000000000000"</ETag></Part></CompleteMultipartUpload>"#
-    );
+    let complete_xml = r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"00000000000000000000000000000000"</ETag></Part></CompleteMultipartUpload>"#
+        .to_string();
     let complete_resp = client
         .post(format!("{}/file.bin?uploadId={}", base, upload_id))
         .header("Content-Type", "application/xml")
@@ -165,7 +147,8 @@ async fn test_multipart_complete_wrong_etag_400() {
 #[tokio::test]
 async fn test_multipart_complete_unknown_upload_404() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let complete_xml = r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"abc"</ETag></Part></CompleteMultipartUpload>"#;
@@ -183,7 +166,8 @@ async fn test_multipart_complete_unknown_upload_404() {
 #[tokio::test]
 async fn test_multipart_upload_part_invalid_number() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let create_resp = client
@@ -191,7 +175,7 @@ async fn test_multipart_upload_part_invalid_number() {
         .send()
         .await
         .expect("create");
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     // Part number 0 is invalid
     let resp = client
@@ -208,7 +192,8 @@ async fn test_multipart_upload_part_invalid_number() {
 #[tokio::test]
 async fn test_multipart_etag_uses_s3_formula() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let content = b"identical content for both methods";
@@ -235,7 +220,7 @@ async fn test_multipart_etag_uses_s3_formula() {
         .send()
         .await
         .expect("create");
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     let part_resp = client
         .put(format!("{}/multipart.bin?partNumber=1&uploadId={}", base, upload_id))
@@ -264,7 +249,7 @@ async fn test_multipart_etag_uses_s3_formula() {
         .expect("complete");
     assert_eq!(complete_resp.status(), 200);
     let complete_body = complete_resp.text().await.unwrap();
-    let multipart_etag = parse_etag_from_xml(&complete_body);
+    let multipart_etag = parse_xml_tag(&complete_body, "ETag");
 
     let expected_put_etag = etag::compute_file_etag(&dir.path().join("direct.bin"))
         .await
@@ -284,7 +269,8 @@ async fn test_multipart_etag_uses_s3_formula() {
 #[tokio::test]
 async fn test_multipart_persists_user_metadata_headers() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let base = spawn_server(dir.path().to_owned()).await;
+    let server = spawn_server(dir.path());
+    let base = server.url();
     let client = reqwest::Client::new();
 
     let create_resp = client
@@ -293,7 +279,7 @@ async fn test_multipart_persists_user_metadata_headers() {
         .send()
         .await
         .expect("create");
-    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
 
     let part_resp = client
         .put(format!("{}/meta.bin?partNumber=1&uploadId={}", base, upload_id))

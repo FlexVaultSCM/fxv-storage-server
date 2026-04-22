@@ -1,14 +1,21 @@
+// == Std
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+    time::SystemTime,
+};
+
+// == Internal
 use crate::{
     errors::*,
     metadata_cache::{self, ChecksumSet, HeaderEntry},
     multipart_state,
 };
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::SystemTime,
-};
+
+// == External
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -114,7 +121,7 @@ fn walk_dir_boxed<'a>(
     rel_base: &'a Path,
     dir: &'a Path,
     map: &'a mut HashMap<String, FileEntry>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
     Box::pin(walk_dir(rel_base, dir, map))
 }
 
@@ -143,16 +150,21 @@ pub async fn build_shared_store(serve_dir: &Path) -> Result<SharedStore> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_store_builds_and_indexes_files() {
+        // Create a serve tree with files at multiple depths.
         let dir = TempDir::new().expect("tempdir");
-        std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
-        std::fs::write(dir.path().join("root.txt"), b"root file").expect("write root");
-        std::fs::write(dir.path().join("sub/nested.txt"), b"nested file").expect("write nested");
+        fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
+        fs::write(dir.path().join("root.txt"), b"root file").expect("write root");
+        fs::write(dir.path().join("sub/nested.txt"), b"nested file").expect("write nested");
 
+        // Build the in-memory store from disk.
         let store = FileStore::build(dir.path()).await.expect("build");
+
+        // Verify both files are indexed under their relative keys.
         assert!(store.get("root.txt").is_some());
         assert!(store.get("sub/nested.txt").is_some());
         assert!(store.get("nonexistent.txt").is_none());
@@ -160,15 +172,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_skips_metadata_cache_dir() {
+        // Create both a real object and an internal metadata-cache entry.
         let dir = TempDir::new().expect("tempdir");
         let cache_dir = dir.path().join(metadata_cache::METADATA_CACHE_DIR);
-        std::fs::create_dir_all(&cache_dir).expect("mkdir cache");
-        std::fs::write(cache_dir.join("some_cache_file"), b"internal").expect("write cache");
-        std::fs::write(dir.path().join("real.txt"), b"real content").expect("write real");
+        fs::create_dir_all(&cache_dir).expect("mkdir cache");
+        fs::write(cache_dir.join("some_cache_file"), b"internal").expect("write cache");
+        fs::write(dir.path().join("real.txt"), b"real content").expect("write real");
 
+        // Build the store while walking the serve directory.
         let store = FileStore::build(dir.path()).await.expect("build");
         assert!(store.get("real.txt").is_some());
-        // Cache dir contents must not appear
+
+        // Verify internal cache files are excluded from the object index.
         assert!(
             store
                 .get(&format!("{}/some_cache_file", metadata_cache::METADATA_CACHE_DIR))
@@ -178,14 +193,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_skips_multipart_upload_dir() {
+        // Create both a real object and an internal multipart scratch file.
         let dir = TempDir::new().expect("tempdir");
         let multipart_dir = dir.path().join(multipart_state::MULTIPART_UPLOAD_DIR);
-        std::fs::create_dir_all(&multipart_dir).expect("mkdir multipart");
-        std::fs::write(multipart_dir.join("part-abc-1.fxv_tmp"), b"internal").expect("write part");
-        std::fs::write(dir.path().join("real.txt"), b"real content").expect("write real");
+        fs::create_dir_all(&multipart_dir).expect("mkdir multipart");
+        fs::write(multipart_dir.join("part-abc-1.fxv_tmp"), b"internal").expect("write part");
+        fs::write(dir.path().join("real.txt"), b"real content").expect("write real");
 
+        // Build the store while walking the serve directory.
         let store = FileStore::build(dir.path()).await.expect("build");
         assert!(store.get("real.txt").is_some());
+
+        // Verify multipart scratch files are excluded from the object index.
         assert!(
             store
                 .get(&format!("{}/part-abc-1.fxv_tmp", multipart_state::MULTIPART_UPLOAD_DIR))
@@ -195,12 +214,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_upsert_and_remove() {
+        // Seed the store with a single object on disk.
         let dir = TempDir::new().expect("tempdir");
-        std::fs::write(dir.path().join("a.txt"), b"a").expect("write");
+        fs::write(dir.path().join("a.txt"), b"a").expect("write");
         let mut store = FileStore::build(dir.path()).await.expect("build");
 
+        // Remove the indexed object from the in-memory store.
         assert!(store.get("a.txt").is_some());
         store.remove("a.txt");
+
+        // Verify the entry is no longer present.
         assert!(store.get("a.txt").is_none());
     }
 }

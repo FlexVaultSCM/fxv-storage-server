@@ -10,8 +10,11 @@
 //! 3. If-None-Match          -> 304 on match
 //! 4. If-Modified-Since      -> 304 on unmodified (only if If-None-Match absent)
 
-use http::StatusCode;
+// == Std
 use std::time::SystemTime;
+
+// == External
+use http::StatusCode;
 
 /// Result of evaluating conditional headers.
 #[derive(Debug, PartialEq, Eq)]
@@ -26,6 +29,7 @@ pub enum ConditionalResult {
 
 impl ConditionalResult {
     #[allow(dead_code)]
+    /// Return the HTTP status associated with this conditional result, if any.
     pub fn status_code(&self) -> Option<StatusCode> {
         match self {
             ConditionalResult::Proceed => None,
@@ -118,7 +122,7 @@ fn is_modified_since(modified: SystemTime, since: SystemTime) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, SystemTime};
+    use std::time::Duration;
 
     fn ts(secs: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -129,6 +133,7 @@ mod tests {
 
     #[test]
     fn test_no_conditionals_proceeds() {
+        // Verify an unconditional request proceeds normally.
         assert_eq!(
             evaluate(ETAG, ts(1000), None, None, None, None),
             ConditionalResult::Proceed
@@ -137,6 +142,7 @@ mod tests {
 
     #[test]
     fn test_if_match_match_proceeds() {
+        // Verify a matching If-Match header allows the request.
         assert_eq!(
             evaluate(ETAG, ts(1000), Some(ETAG), None, None, None),
             ConditionalResult::Proceed
@@ -145,6 +151,7 @@ mod tests {
 
     #[test]
     fn test_if_match_mismatch_precondition_failed() {
+        // Verify a mismatched If-Match header rejects the request.
         assert_eq!(
             evaluate(ETAG, ts(1000), Some(OTHER_ETAG), None, None, None),
             ConditionalResult::PreconditionFailed
@@ -153,6 +160,7 @@ mod tests {
 
     #[test]
     fn test_if_match_wildcard_proceeds() {
+        // Verify the wildcard If-Match form accepts an existing object.
         assert_eq!(
             evaluate(ETAG, ts(1000), Some("*"), None, None, None),
             ConditionalResult::Proceed
@@ -161,6 +169,7 @@ mod tests {
 
     #[test]
     fn test_if_none_match_match_not_modified() {
+        // Verify a matching If-None-Match header produces 304 semantics.
         assert_eq!(
             evaluate(ETAG, ts(1000), None, Some(ETAG), None, None),
             ConditionalResult::NotModified
@@ -169,6 +178,7 @@ mod tests {
 
     #[test]
     fn test_if_none_match_mismatch_proceeds() {
+        // Verify a non-matching If-None-Match header still allows the request.
         assert_eq!(
             evaluate(ETAG, ts(1000), None, Some(OTHER_ETAG), None, None),
             ConditionalResult::Proceed
@@ -177,6 +187,7 @@ mod tests {
 
     #[test]
     fn test_if_none_match_wildcard_not_modified() {
+        // Verify wildcard If-None-Match blocks access to an existing object.
         assert_eq!(
             evaluate(ETAG, ts(1000), None, Some("*"), None, None),
             ConditionalResult::NotModified
@@ -185,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_if_modified_since_not_modified() {
-        // modified == since -> not modified
+        // Verify an unchanged timestamp yields NotModified.
         assert_eq!(
             evaluate(ETAG, ts(1000), None, None, Some(ts(1000)), None),
             ConditionalResult::NotModified
@@ -194,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_if_modified_since_modified() {
-        // modified > since -> modified
+        // Verify a newer object still proceeds past If-Modified-Since.
         assert_eq!(
             evaluate(ETAG, ts(2000), None, None, Some(ts(1000)), None),
             ConditionalResult::Proceed
@@ -203,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_if_unmodified_since_passes() {
-        // modified <= since -> precondition passes
+        // Verify If-Unmodified-Since passes when the object is old enough.
         assert_eq!(
             evaluate(ETAG, ts(1000), None, None, None, Some(ts(2000))),
             ConditionalResult::Proceed
@@ -212,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_if_unmodified_since_fails() {
-        // modified > since -> precondition failed
+        // Verify If-Unmodified-Since fails when the object changed too recently.
         assert_eq!(
             evaluate(ETAG, ts(2000), None, None, None, Some(ts(1000))),
             ConditionalResult::PreconditionFailed
@@ -221,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_if_match_overrides_if_unmodified_since() {
-        // If-Match matches, so If-Unmodified-Since is ignored even if it would fail
+        // Verify If-Match wins over a failing If-Unmodified-Since header.
         assert_eq!(
             evaluate(ETAG, ts(2000), Some(ETAG), None, None, Some(ts(1000))),
             ConditionalResult::Proceed
@@ -230,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_if_none_match_overrides_if_modified_since() {
-        // If-None-Match matches -> 304, even though If-Modified-Since would say modified
+        // Verify If-None-Match wins over a conflicting If-Modified-Since header.
         assert_eq!(
             evaluate(ETAG, ts(2000), None, Some(ETAG), Some(ts(1000)), None),
             ConditionalResult::NotModified
