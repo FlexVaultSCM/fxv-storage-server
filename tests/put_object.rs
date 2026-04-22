@@ -241,3 +241,46 @@ async fn test_put_nested_key_creates_dirs() {
         .expect("body");
     assert_eq!(body.as_ref(), b"nested content");
 }
+
+/// User-controlled x-amz-meta-* headers should be persisted and replayed on GET.
+#[tokio::test]
+async fn test_put_persists_user_metadata_headers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = spawn_server(dir.path().to_owned()).await;
+
+    let client = reqwest::Client::new();
+    let put_resp = client
+        .put(format!("{}/meta.txt", base))
+        .header("x-amz-meta-owner", "alice")
+        .header("x-amz-meta-color", "blue")
+        .body("metadata")
+        .send()
+        .await
+        .expect("PUT");
+    assert_eq!(put_resp.status(), 200);
+
+    let get_resp = client
+        .get(format!("{}/meta.txt", base))
+        .send()
+        .await
+        .expect("GET");
+    assert_eq!(get_resp.status(), 200);
+    assert_eq!(
+        get_resp
+            .headers()
+            .get("x-amz-meta-owner")
+            .expect("owner header")
+            .to_str()
+            .unwrap(),
+        "alice"
+    );
+    assert_eq!(
+        get_resp
+            .headers()
+            .get("x-amz-meta-color")
+            .expect("color header")
+            .to_str()
+            .unwrap(),
+        "blue"
+    );
+}

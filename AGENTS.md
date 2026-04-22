@@ -46,7 +46,8 @@ src/
   config.rs            - Config struct (serve_dir, port)
   errors.rs            - error_chain! error types
   store.rs             - FileStore: HashMap<key, FileEntry>, SharedStore = Arc<RwLock<FileStore>>
-  etag.rs              - MD5 and multipart ETag helpers; .fxv-etag-cache/ disk cache
+  etag.rs              - MD5 and multipart ETag helpers
+  metadata_cache.rs    - Structured JSON metadata cache for ETag, checksums, and custom headers
   server.rs            - Shared async bootstrap helpers: build app, bind listener, serve with shutdown
   test_server.rs       - Blocking RAII helper for spinning up the server in synchronous tests
   conditional.rs       - RFC 7232 If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since
@@ -89,10 +90,11 @@ pub struct AppState {
 - MD5 hash of file content for normal objects, hex-encoded, double-quoted wire format: `"<32 hex chars>"`
 - Completed multipart uploads use the S3 multipart ETag form: `"<32 hex chars>-<part count>"`
 - Computed during upload (streaming) - no post-write re-read needed
-- Cached to disk at `<serve_dir>/.fxv-etag-cache/<rel/path/to/file>` as `"<mtime_secs> <etag>"`
-- Cache is mtime-invalidated: if file mtime changes, ETag is recomputed
+- Cached to disk at `<serve_dir>/.fxv-metadata-cache/<rel/path/to/file>.json` as structured JSON
+- Cache is mtime-invalidated: if file mtime changes, metadata is recomputed or refreshed
 - Multipart ETags are preserved across restart via the on-disk cache; if the cache is missing, startup
   can only recompute a whole-object MD5 from bytes on disk because multipart part boundaries are gone
+- Custom headers from metadata are replayed on applicable GET responses (200, 206, and 304)
 
 ### Atomic Writes
 
@@ -105,13 +107,13 @@ file.
 - `FileStore` is behind a `tokio::sync::RwLock`. Multiple concurrent GETs hold the read lock
   simultaneously; writes are exclusive.
 - **TOCTOU fix**: The conditional check (If-Match / If-None-Match), temp-file rename,
-  `save_cached_etag`, and store upsert are all performed under a single write-lock acquisition
+  metadata-cache write, and store upsert are all performed under a single write-lock acquisition
   in both `put_object` and `complete_multipart_upload`. An early read-lock check is kept as an
   optimization to reject obviously-failing requests before streaming the body, but the write-lock
   re-check is the definitive gate.
-- `save_cached_etag` uses `tokio::fs::write` which is not atomic in isolation. It is safe
+- Metadata-cache writes use `tokio::fs::write` which is not atomic in isolation. It is safe
   because **all runtime call-sites hold the FileStore write lock** for the duration. The
-  `get_or_compute_etag` call-site (used only during `FileStore::build` at startup) runs before
+  metadata synthesis call-site used during `FileStore::build` at startup runs before
   any requests are served. File-level locking is not needed - this is a single-process design.
 - Multipart upload state (`SharedUploadState`) has its own independent `RwLock`.
 
@@ -140,8 +142,8 @@ the shared server runner, reducing latency for small request/response exchanges.
 | Multipart ETag | S3 multipart formula (`md5(part-md5s)-N`) | Matches S3 semantics |
 | `tower-http::ServeDir` | Rejected | No ETag support; incompatible with conditional header requirements |
 | Multipart state persistence | None (in-memory only) | Lost on restart - acceptable for our use case |
-| Part temp storage | `<serve_dir>/.fxv-multipart-uploads/part-<id>-<n>.fxv_tmp` | Keeps upload scratch data separate from cached ETags |
-| Content-Type | Always `application/octet-stream` | No MIME detection needed |
+| Part temp storage | `<serve_dir>/.fxv-multipart-uploads/part-<id>-<n>.fxv_tmp` | Keeps upload scratch data separate from cached object metadata |
+| Content-Type | Default `application/octet-stream`, overrideable via metadata | Supports server-controlled and persisted object metadata |
 | Bucket concept | None | Bucket name is absorbed into the key path |
 | `If-Match: *` on PutObject | "object must exist, any ETag OK" -> 412 if missing | Matches S3 behaviour |
 | Leading `/` in key | Stripped by `sanitize_key()` | S3 treats `/key` and `key` as equivalent |

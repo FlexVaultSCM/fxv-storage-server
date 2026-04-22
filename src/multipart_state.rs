@@ -2,6 +2,7 @@
 ///
 /// Lives only for the duration of the server process; lost on restart.
 use crate::etag::Md5DigestBytes;
+use crate::metadata_cache::HeaderEntry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,10 +25,12 @@ pub struct PartEntry {
 }
 
 /// State for one in-progress multipart upload.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UploadEntry {
     /// Object key this upload targets.
     pub key: String,
+    /// Custom headers to apply to the completed object.
+    pub custom_headers: Vec<HeaderEntry>,
     /// Parts uploaded so far, keyed by 1-based part number.
     pub parts: HashMap<u32, PartEntry>,
 }

@@ -4,6 +4,7 @@ pub mod config;
 pub mod errors;
 pub mod etag;
 pub mod handlers;
+pub mod metadata_cache;
 pub mod multipart_state;
 pub mod range;
 pub mod s3_xml_compat;

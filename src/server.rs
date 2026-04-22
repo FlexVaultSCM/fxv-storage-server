@@ -4,11 +4,26 @@ use std::{future::Future, net::SocketAddr, path::Path};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
+pub async fn build_store_for_dir(serve_dir: &Path) -> Result<store::SharedStore> {
+    info!("Building file index from {:?}", serve_dir);
+    store::build_shared_store(serve_dir).await
+}
+
+pub fn build_app_from_store(shared_store: store::SharedStore) -> Router {
+    build_app(shared_store)
+}
+
+/// Build the application router and backing file index for a serve directory.
+pub async fn build_store_and_app(serve_dir: &Path) -> Result<(store::SharedStore, Router)> {
+    let shared_store = build_store_for_dir(serve_dir).await?;
+    let app = build_app_from_store(shared_store.clone());
+    Ok((shared_store, app))
+}
+
 /// Build the application router and backing file index for a serve directory.
 pub async fn build_app_from_dir(serve_dir: &Path) -> Result<Router> {
-    info!("Building file index from {:?}", serve_dir);
-    let shared_store = store::build_shared_store(serve_dir).await?;
-    Ok(build_app(shared_store))
+    let (_, app) = build_store_and_app(serve_dir).await?;
+    Ok(app)
 }
 
 /// Bind a TCP listener for the server.
@@ -43,7 +58,7 @@ pub async fn run_with_shutdown<S>(config: &Config, shutdown: S) -> Result<()>
 where
     S: Future<Output = ()> + Send + 'static,
 {
-    let app = build_app_from_dir(&config.serve_dir).await?;
+    let (_, app) = build_store_and_app(&config.serve_dir).await?;
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = bind_listener(addr).await?;
     serve_with_shutdown(listener, app, shutdown).await

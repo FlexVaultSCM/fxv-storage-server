@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::conditional::{self, ConditionalResult};
+use crate::metadata_cache;
 use crate::range;
 use crate::s3_xml_compat::{
     err_internal, err_invalid_range, err_no_such_key, err_precondition_failed,
@@ -59,12 +60,15 @@ pub async fn get_object(
 
     match cond {
         ConditionalResult::NotModified => {
-            return Response::builder()
-                .status(StatusCode::NOT_MODIFIED)
-                .header(header::ETAG, &entry.etag)
-                .header(header::LAST_MODIFIED, fmt_http_date(entry.modified))
-                .body(Body::empty())
-                .expect("build 304");
+            return with_custom_headers(
+                Response::builder()
+                    .status(StatusCode::NOT_MODIFIED)
+                    .header(header::ETAG, &entry.etag)
+                    .header(header::LAST_MODIFIED, fmt_http_date(entry.modified))
+                    .body(Body::empty())
+                    .expect("build 304"),
+                &entry,
+            );
         }
         ConditionalResult::PreconditionFailed => return err_precondition_failed(),
         ConditionalResult::Proceed => {}
@@ -99,15 +103,18 @@ pub async fn get_object(
             // Full response
             debug!("GET {} -> 200 ({} bytes)", key, entry.size);
             let stream = tokio_util::io::ReaderStream::new(file);
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
-                .header(header::CONTENT_LENGTH, entry.size.to_string())
-                .header(header::ETAG, &entry.etag)
-                .header(header::LAST_MODIFIED, last_modified_str)
-                .header(header::ACCEPT_RANGES, "bytes")
-                .body(Body::from_stream(stream))
-                .expect("build 200")
+            with_custom_headers(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .header(header::CONTENT_LENGTH, entry.size.to_string())
+                    .header(header::ETAG, &entry.etag)
+                    .header(header::LAST_MODIFIED, last_modified_str)
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .body(Body::from_stream(stream))
+                    .expect("build 200"),
+                &entry,
+            )
         }
         Some(range) => {
             // Partial response
@@ -124,21 +131,29 @@ pub async fn get_object(
             }
             let limited = tokio::io::AsyncReadExt::take(file, range.len());
             let stream = tokio_util::io::ReaderStream::new(limited);
-            Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(header::CONTENT_TYPE, "application/octet-stream")
-                .header(header::CONTENT_LENGTH, range.len().to_string())
-                .header(
-                    header::CONTENT_RANGE,
-                    range.content_range_header(entry.size),
-                )
-                .header(header::ETAG, &entry.etag)
-                .header(header::LAST_MODIFIED, last_modified_str)
-                .header(header::ACCEPT_RANGES, "bytes")
-                .body(Body::from_stream(stream))
-                .expect("build 206")
+            with_custom_headers(
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .header(header::CONTENT_LENGTH, range.len().to_string())
+                    .header(
+                        header::CONTENT_RANGE,
+                        range.content_range_header(entry.size),
+                    )
+                    .header(header::ETAG, &entry.etag)
+                    .header(header::LAST_MODIFIED, last_modified_str)
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .body(Body::from_stream(stream))
+                    .expect("build 206"),
+                &entry,
+            )
         }
     }
+}
+
+fn with_custom_headers(mut response: Response, entry: &crate::store::FileEntry) -> Response {
+    metadata_cache::apply_custom_headers(response.headers_mut(), &entry.custom_headers);
+    response
 }
 
 /// Parse an HTTP-date string (RFC 7231 / RFC 1123) into a `SystemTime`.

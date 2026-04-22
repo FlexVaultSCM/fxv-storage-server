@@ -307,3 +307,65 @@ async fn test_multipart_etag_uses_s3_formula() {
     );
     assert_ne!(put_etag, multipart_etag);
 }
+
+/// Metadata supplied at multipart initiation should be replayed on the completed object.
+#[tokio::test]
+async fn test_multipart_persists_user_metadata_headers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = spawn_server(dir.path().to_owned()).await;
+    let client = reqwest::Client::new();
+
+    let create_resp = client
+        .post(format!("{}/meta.bin?uploads", base))
+        .header("x-amz-meta-owner", "alice")
+        .send()
+        .await
+        .expect("create");
+    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+
+    let part_resp = client
+        .put(format!(
+            "{}/meta.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
+        .body("data")
+        .send()
+        .await
+        .expect("upload part");
+    let part_etag = part_resp
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let complete_xml = format!(
+        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{}</ETag></Part></CompleteMultipartUpload>"#,
+        part_etag
+    );
+    let complete_resp = client
+        .post(format!("{}/meta.bin?uploadId={}", base, upload_id))
+        .header("Content-Type", "application/xml")
+        .body(complete_xml)
+        .send()
+        .await
+        .expect("complete");
+    assert_eq!(complete_resp.status(), 200);
+
+    let get_resp = client
+        .get(format!("{}/meta.bin", base))
+        .send()
+        .await
+        .expect("GET");
+    assert_eq!(get_resp.status(), 200);
+    assert_eq!(
+        get_resp
+            .headers()
+            .get("x-amz-meta-owner")
+            .expect("owner header")
+            .to_str()
+            .unwrap(),
+        "alice"
+    );
+}

@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::etag;
+use crate::metadata_cache;
 use crate::s3_xml_compat::{err_internal, err_invalid_argument};
 use crate::store::SharedStore;
 use axum::{
@@ -53,15 +53,14 @@ async fn delete_object(store: SharedStore, key: String) -> Response {
         }
     }
 
-    if let Err(e) = etag::remove_cached_etag(&serve_dir, &rel_path).await
+    if let Err(e) = metadata_cache::remove_metadata_cache(&serve_dir, &rel_path).await
         && e.kind() != std::io::ErrorKind::NotFound
     {
         warn!(
-            "DeleteObject cache cleanup for {:?} failed: {}",
+            "DeleteObject metadata cleanup for {:?} failed: {}",
             rel_path, e
         );
     }
-
     store.remove(&key);
 
     debug!("DeleteObject {} -> 204", key);

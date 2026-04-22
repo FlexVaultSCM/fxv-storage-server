@@ -1,10 +1,12 @@
 use crate::errors;
+use crate::metadata_cache;
 use crate::server;
+use crate::store::SharedStore;
 use std::{
     fmt,
     net::SocketAddr,
     ops::Range,
-    path,
+    path::{self, PathBuf},
     sync::{Arc, mpsc},
     thread,
     time::Duration,
@@ -20,6 +22,8 @@ const DEFAULT_PORT_WINDOW: u16 = 100;
 /// can use it from synchronous unit tests.
 pub struct TestServer {
     local_addr: SocketAddr,
+    serve_dir: PathBuf,
+    store: SharedStore,
     shutdown: Arc<Notify>,
     join_handle: Option<thread::JoinHandle<()>>,
 }
@@ -27,6 +31,7 @@ pub struct TestServer {
 #[derive(Debug)]
 pub enum TestServerError {
     Startup(errors::Error),
+    Operation(errors::Error),
     StartupTimedOut(Duration),
     StartupChannelClosed,
     ThreadPanicked,
@@ -36,6 +41,7 @@ impl fmt::Display for TestServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Startup(err) => write!(f, "server startup failed: {}", err),
+            Self::Operation(err) => write!(f, "server operation failed: {}", err),
             Self::StartupTimedOut(timeout) => {
                 write!(f, "timed out waiting {:?} for server startup", timeout)
             }
@@ -75,8 +81,59 @@ impl TestServer {
         format!("http://{}", self.local_addr)
     }
 
+    pub fn add_custom_header(
+        &self,
+        path: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<(), TestServerError> {
+        let rel_path = crate::handlers::put_object::sanitize_key(path)
+            .ok_or_else(|| invalid_input_error("The specified object key is invalid."))
+            .map_err(TestServerError::Operation)?;
+        let object_key = rel_path_to_key(&rel_path);
+        let serve_dir = self.serve_dir.clone();
+        let store = self.store.clone();
+        let key = key.to_owned();
+        let value = value.to_owned();
+
+        block_on_result(async move {
+            let mut store = store.write().await;
+            let existing = store
+                .get(&object_key)
+                .cloned()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("object '{}' not found", object_key),
+                    )
+                })
+                .map_err(errors::Error::from)?;
+            let mut custom_headers = existing.custom_headers.clone();
+            metadata_cache::upsert_custom_header(&mut custom_headers, &key, &value)?;
+
+            let metadata = metadata_cache::ObjectMetadataCache::from_current_state(
+                existing.modified,
+                existing.etag.clone(),
+                existing.checksums.clone(),
+                custom_headers.clone(),
+            );
+            metadata_cache::save_metadata_cache(&serve_dir, &rel_path, &metadata).await;
+
+            store.upsert(
+                object_key.clone(),
+                crate::store::FileEntry {
+                    custom_headers,
+                    ..existing
+                },
+            );
+            Ok(())
+        })
+        .map_err(TestServerError::Operation)
+    }
+
     fn start(serve_dir: &path::Path, bind_strategy: BindStrategy) -> Result<Self, TestServerError> {
         let serve_dir = serve_dir.to_path_buf();
+        let serve_dir_for_thread = serve_dir.clone();
         let shutdown = Arc::new(Notify::new());
         let shutdown_inner = shutdown.clone();
         let (startup_tx, startup_rx) = mpsc::sync_channel(1);
@@ -94,10 +151,10 @@ impl TestServer {
                 let result = async {
                     let listener = bind_strategy.bind_listener().await?;
                     let local_addr = listener.local_addr()?;
-                    let app = server::build_app_from_dir(&serve_dir).await?;
+                    let (store, app) = server::build_store_and_app(&serve_dir_for_thread).await?;
                     let shutdown_for_server = shutdown_inner.clone();
 
-                    let _ = startup_tx.send(Ok(local_addr));
+                    let _ = startup_tx.send(Ok(StartupSuccess { local_addr, store }));
                     server::serve_with_shutdown(listener, app, async move {
                         shutdown_for_server.notified().await;
                     })
@@ -111,8 +168,8 @@ impl TestServer {
             });
         });
 
-        let local_addr = match startup_rx.recv_timeout(STARTUP_TIMEOUT) {
-            Ok(Ok(local_addr)) => local_addr,
+        let StartupSuccess { local_addr, store } = match startup_rx.recv_timeout(STARTUP_TIMEOUT) {
+            Ok(Ok(started)) => started,
             Ok(Err(err)) => {
                 join_handle
                     .join()
@@ -134,6 +191,8 @@ impl TestServer {
 
         Ok(Self {
             local_addr,
+            serve_dir,
+            store,
             shutdown,
             join_handle: Some(join_handle),
         })
@@ -185,6 +244,39 @@ async fn bind_first_available_port(
         ),
     )
     .into())
+}
+
+struct StartupSuccess {
+    local_addr: SocketAddr,
+    store: SharedStore,
+}
+
+fn rel_path_to_key(rel_path: &path::Path) -> String {
+    rel_path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn invalid_input_error(message: &str) -> errors::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, message).into()
+}
+
+fn block_on_result<F, T>(future: F) -> errors::Result<T>
+where
+    F: std::future::Future<Output = errors::Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    if tokio::runtime::Handle::try_current().is_ok() {
+        thread::spawn(move || Runtime::new()?.block_on(future))
+            .join()
+            .map_err(|_| {
+                errors::Error::from(std::io::Error::other("metadata helper thread panicked"))
+            })?
+    } else {
+        Runtime::new()?.block_on(future)
+    }
 }
 
 #[cfg(test)]

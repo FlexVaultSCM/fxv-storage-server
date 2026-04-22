@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::etag;
+use crate::metadata_cache::{self, ChecksumSet, ObjectMetadataCache};
 use crate::multipart_state::UploadEntry;
 use crate::s3_xml_compat::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
@@ -15,6 +16,7 @@ use axum::{
 };
 use bytes::Bytes;
 use http_body_util::BodyExt;
+use md5::{Digest, Md5};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -35,11 +37,11 @@ pub async fn post_dispatch(
     State(state): State<AppState>,
     Path(key): Path<String>,
     Query(params): Query<PostParams>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     body: Body,
 ) -> Response {
     if params.uploads.is_some() {
-        create_multipart_upload(state, key).await
+        create_multipart_upload(state, key, headers).await
     } else if let Some(upload_id) = params.upload_id {
         complete_multipart_upload(state, key, upload_id, body).await
     } else {
@@ -48,14 +50,16 @@ pub async fn post_dispatch(
 }
 
 /// CreateMultipartUpload: allocate an upload ID and return it in XML.
-async fn create_multipart_upload(state: AppState, key: String) -> Response {
+async fn create_multipart_upload(state: AppState, key: String, headers: HeaderMap) -> Response {
     let upload_id = uuid::Uuid::new_v4().to_string();
+    let custom_headers = metadata_cache::extract_user_metadata_headers(&headers);
     {
         let mut uploads = state.uploads.write().await;
         uploads.insert(
             upload_id.clone(),
             UploadEntry {
                 key: key.clone(),
+                custom_headers,
                 parts: HashMap::new(),
             },
         );
@@ -110,11 +114,7 @@ async fn complete_multipart_upload(
     let upload_entry = {
         let uploads = state.uploads.read().await;
         match uploads.get(&upload_id) {
-            Some(e) if e.key == key => e
-                .parts
-                .iter()
-                .map(|(k, v)| (*k, v.clone()))
-                .collect::<HashMap<u32, _>>(),
+            Some(e) if e.key == key => e.clone(),
             Some(_) => {
                 return err_invalid_argument("The upload ID is not associated with this key.");
             }
@@ -125,7 +125,7 @@ async fn complete_multipart_upload(
     // Validate that all requested parts exist and have matching ETags
     let mut ordered_parts = Vec::with_capacity(request.parts.len());
     for cp in &request.parts {
-        match upload_entry.get(&cp.part_number) {
+        match upload_entry.parts.get(&cp.part_number) {
             Some(pe) if pe.etag == cp.etag => ordered_parts.push((cp.part_number, pe.clone())),
             Some(_) | None => return err_invalid_part(),
         }
@@ -148,7 +148,7 @@ async fn complete_multipart_upload(
     let tmp_path = abs_path.with_extension(format!("{}.fxv_tmp", uuid::Uuid::new_v4().simple()));
 
     let assemble_result = assemble_parts(&ordered_parts, &tmp_path).await;
-    let (total_size, final_etag, modified) = match assemble_result {
+    let (total_size, final_etag, md5_hex, modified) = match assemble_result {
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to assemble parts: {}", e);
@@ -157,14 +157,22 @@ async fn complete_multipart_upload(
         }
     };
 
-    let mtime_secs = modified
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let checksums = ChecksumSet {
+        md5: md5_hex,
+        crc32: None,
+        crc64nvme: None,
+    };
+    let object_metadata = ObjectMetadataCache::from_current_state(
+        modified,
+        final_etag.clone(),
+        checksums.clone(),
+        upload_entry.custom_headers.clone(),
+    );
 
-    // Acquire the write lock: rename, save ETag cache, and upsert store as a
-    // single atomic unit.  Holding the write lock for save_cached_etag serialises
-    // all runtime cache file writes (see invariant note in put_object.rs).
+    // Acquire the write lock: rename, save metadata cache, and upsert store as
+    // a single atomic unit. Holding the write lock for save_metadata_cache
+    // serialises all runtime cache file writes (see invariant note in
+    // put_object.rs).
     {
         let mut s = state.store.write().await;
 
@@ -174,7 +182,7 @@ async fn complete_multipart_upload(
             return err_internal();
         }
 
-        etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &final_etag).await;
+        metadata_cache::save_metadata_cache(&serve_dir, &rel_path, &object_metadata).await;
 
         s.upsert(
             key.clone(),
@@ -183,6 +191,8 @@ async fn complete_multipart_upload(
                 size: total_size,
                 modified,
                 etag: final_etag.clone(),
+                checksums: checksums.clone(),
+                custom_headers: upload_entry.custom_headers.clone(),
             },
         );
     }
@@ -227,12 +237,13 @@ async fn collect_body(body: Body) -> std::io::Result<Bytes> {
 }
 
 /// Concatenate part files into `dst`, computing the final S3 multipart ETag.
-/// Returns `(total_bytes, etag, mtime)`.
+/// Returns `(total_bytes, etag, md5_hex, mtime)`.
 async fn assemble_parts(
     parts: &[(u32, crate::multipart_state::PartEntry)],
     dst: &std::path::Path,
-) -> std::io::Result<(u64, String, SystemTime)> {
+) -> std::io::Result<(u64, String, String, SystemTime)> {
     let mut file = tokio::fs::File::create(dst).await?;
+    let mut md5_hasher = Md5::new();
     let mut total: u64 = 0;
     let mut part_digests = Vec::with_capacity(parts.len());
 
@@ -240,6 +251,7 @@ async fn assemble_parts(
         let data = tokio::fs::read(&part.abs_path).await?;
         debug_assert_eq!(part.size, data.len() as u64);
         total += part.size;
+        md5_hasher.update(&data);
         file.write_all(&data).await?;
         part_digests.push(part.md5_bytes);
     }
@@ -250,8 +262,9 @@ async fn assemble_parts(
     let meta = tokio::fs::metadata(dst).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let etag = etag::multipart_etag_from_part_digests(&part_digests);
+    let md5_hex = etag::md5_hex_from_digest_bytes(&md5_hasher.finalize().into());
 
-    Ok((total, etag, modified))
+    Ok((total, etag, md5_hex, modified))
 }
 
 /// AbortMultipartUpload: clean up all temp files and remove upload state.

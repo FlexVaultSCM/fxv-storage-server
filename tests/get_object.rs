@@ -182,3 +182,78 @@ async fn test_range_not_satisfiable_416() {
         .expect("GET");
     assert_eq!(resp.status(), 416);
 }
+
+#[tokio::test]
+async fn test_custom_headers_replayed_on_206_and_304() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("custom.txt"), b"hello world").expect("write");
+
+    let server = fxv_storage_server::test_server::TestServer::new_ephemeral(dir.path())
+        .expect("start server");
+    server
+        .add_custom_header("custom.txt", "Content-Type", "text/plain")
+        .expect("content-type header");
+    server
+        .add_custom_header("custom.txt", "x-amz-meta-owner", "alice")
+        .expect("metadata header");
+
+    let client = reqwest::Client::new();
+    let range_resp = client
+        .get(format!("{}/custom.txt", server.url()))
+        .header("Range", "bytes=0-4")
+        .send()
+        .await
+        .expect("range GET");
+    assert_eq!(range_resp.status(), 206);
+    assert_eq!(
+        range_resp
+            .headers()
+            .get("content-type")
+            .expect("content-type")
+            .to_str()
+            .unwrap(),
+        "text/plain"
+    );
+    assert_eq!(
+        range_resp
+            .headers()
+            .get("x-amz-meta-owner")
+            .expect("metadata header")
+            .to_str()
+            .unwrap(),
+        "alice"
+    );
+    let etag = range_resp
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let not_modified_resp = client
+        .get(format!("{}/custom.txt", server.url()))
+        .header("If-None-Match", etag)
+        .send()
+        .await
+        .expect("conditional GET");
+    assert_eq!(not_modified_resp.status(), 304);
+    assert_eq!(
+        not_modified_resp
+            .headers()
+            .get("content-type")
+            .expect("content-type")
+            .to_str()
+            .unwrap(),
+        "text/plain"
+    );
+    assert_eq!(
+        not_modified_resp
+            .headers()
+            .get("x-amz-meta-owner")
+            .expect("metadata header")
+            .to_str()
+            .unwrap(),
+        "alice"
+    );
+}

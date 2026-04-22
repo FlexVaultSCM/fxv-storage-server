@@ -53,14 +53,14 @@ async fn test_delete_missing_object_is_still_204() {
 }
 
 #[tokio::test]
-async fn test_delete_removes_cached_etag_entry() {
+async fn test_delete_removes_cached_metadata_entry() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("nested")).expect("mkdir");
     std::fs::write(dir.path().join("nested/file.txt"), b"cache me").expect("write");
 
     let base = spawn_server(dir.path().to_owned()).await;
     let client = reqwest::Client::new();
-    let cache_file = dir.path().join(".fxv-etag-cache/nested/file.txt");
+    let cache_file = dir.path().join(".fxv-metadata-cache/nested/file.txt.json");
     assert!(
         cache_file.exists(),
         "startup indexing should create the cache entry"
@@ -74,6 +74,6 @@ async fn test_delete_removes_cached_etag_entry() {
     assert_eq!(resp.status(), 204);
     assert!(
         !cache_file.exists(),
-        "DeleteObject should clear the cached ETag"
+        "DeleteObject should clear the cached metadata"
     );
 }

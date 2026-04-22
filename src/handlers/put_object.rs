@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::etag;
+use crate::metadata_cache::{self, ChecksumSet, ObjectMetadataCache};
 use crate::multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState};
 use crate::s3_xml_compat::{
     err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed,
@@ -56,6 +57,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
     };
 
     let abs_path = serve_dir.join(&rel_path);
+    let user_metadata_headers = metadata_cache::extract_user_metadata_headers(&headers);
 
     // Parse conditional headers.
     let if_match = headers
@@ -102,7 +104,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
 
     let write_result = write_body_to_temp(&tmp_path, body).await;
 
-    let (tmp_size, etag, _, modified) = match write_result {
+    let (tmp_size, etag, md5_bytes, modified) = match write_result {
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to write temp file {:?}: {}", tmp_path, e);
@@ -111,10 +113,17 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         }
     };
 
-    let mtime_secs = modified
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let checksums = ChecksumSet {
+        md5: etag::md5_hex_from_digest_bytes(&md5_bytes),
+        crc32: None,
+        crc64nvme: None,
+    };
+    let object_metadata = ObjectMetadataCache::from_current_state(
+        modified,
+        etag.clone(),
+        checksums.clone(),
+        user_metadata_headers.clone(),
+    );
 
     // Acquire the write lock and perform the conditional re-check, rename, cache
     // write, and store upsert as a single atomic unit.
@@ -122,8 +131,9 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
     // Re-checking under the write lock closes the TOCTOU window: no other writer
     // can modify the store entry between this check and the upsert.
     //
-    // save_cached_etag is called while holding the write lock, which serialises
-    // all cache file writes - making the non-atomic tokio::fs::write safe.
+    // save_metadata_cache is called while holding the write lock, which
+    // serialises all metadata cache file writes - making the non-atomic
+    // tokio::fs::write safe.
     {
         let mut s = store.write().await;
 
@@ -153,10 +163,10 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
             return err_internal();
         }
 
-        // Persist ETag to the disk cache.  Safe to use tokio::fs::write here
+        // Persist object metadata to the disk cache. Safe to use tokio::fs::write here
         // because we are the only writer: the write lock is held for the
-        // duration and all runtime call-sites of save_cached_etag hold it.
-        etag::save_cached_etag(&serve_dir, &rel_path, mtime_secs, &etag).await;
+        // duration and all runtime call-sites of save_metadata_cache hold it.
+        metadata_cache::save_metadata_cache(&serve_dir, &rel_path, &object_metadata).await;
 
         // Update the in-memory index.
         s.upsert(
@@ -166,6 +176,8 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
                 size: tmp_size,
                 modified,
                 etag: etag.clone(),
+                checksums: checksums.clone(),
+                custom_headers: user_metadata_headers.clone(),
             },
         );
     }

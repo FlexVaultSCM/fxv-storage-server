@@ -21,9 +21,9 @@
 - **Atomicity**: All writes use a temp-file-then-rename pattern, so partial files are never served.
 - **Conditional headers**: Full RFC 7232 support (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since).
 - **Range requests**: Single-range requests supported (S3 constraint: no multi-range).
-- **Content-Type**: Always `application/octet-stream`.
-- **ETag cache**: Precomputed ETags are cached in `.fxv-etag-cache/` inside the serve directory to avoid re-hashing on restart.
-- **Multipart temp storage**: In-progress uploaded parts live under `.fxv-multipart-uploads/`, separate from the ETag cache.
+- **Content-Type**: Defaults to `application/octet-stream`, but can be overridden by stored metadata.
+- **Metadata cache**: Per-object metadata is cached as JSON under `.fxv-metadata-cache/`, including ETag, checksums, and optional custom headers.
+- **Multipart temp storage**: In-progress uploaded parts live under `.fxv-multipart-uploads/`, separate from the metadata cache.
 
 ## Usage
 

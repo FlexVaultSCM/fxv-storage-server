@@ -1,5 +1,5 @@
 use crate::errors::*;
-use crate::etag;
+use crate::metadata_cache::{self, ChecksumSet, HeaderEntry};
 use crate::multipart_state;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,10 @@ pub struct FileEntry {
     pub modified: SystemTime,
     /// Pre-computed ETag (double-quoted string).
     pub etag: String,
+    /// Stored checksums for the object.
+    pub checksums: ChecksumSet,
+    /// Stored custom headers for the object.
+    pub custom_headers: Vec<HeaderEntry>,
 }
 
 /// In-memory index of files in the serve directory.
@@ -72,9 +76,10 @@ async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEnt
         let file_type = entry.file_type().await?;
 
         if file_type.is_dir() {
-            // Skip the ETag cache directory
+            // Skip metadata and multipart internal directories
             if path.file_name().is_some_and(|n| {
-                n == etag::ETAG_CACHE_DIR || n == multipart_state::MULTIPART_UPLOAD_DIR
+                n == metadata_cache::METADATA_CACHE_DIR
+                    || n == multipart_state::MULTIPART_UPLOAD_DIR
             }) {
                 continue;
             }
@@ -111,12 +116,14 @@ fn walk_dir_boxed<'a>(
 
 async fn compute_entry(serve_dir: &Path, rel_path: &Path, abs_path: &Path) -> Result<FileEntry> {
     let meta = tokio::fs::metadata(abs_path).await?;
-    let etag = etag::get_or_compute_etag(serve_dir, rel_path).await?;
+    let metadata = metadata_cache::get_or_compute_metadata(serve_dir, rel_path).await?;
     Ok(FileEntry {
         abs_path: abs_path.to_owned(),
         size: meta.len(),
         modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-        etag,
+        etag: metadata.etag,
+        checksums: metadata.checksums,
+        custom_headers: metadata.custom_headers,
     })
 }
 
@@ -148,9 +155,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_store_skips_etag_cache_dir() {
+    async fn test_store_skips_metadata_cache_dir() {
         let dir = TempDir::new().expect("tempdir");
-        let cache_dir = dir.path().join(etag::ETAG_CACHE_DIR);
+        let cache_dir = dir.path().join(metadata_cache::METADATA_CACHE_DIR);
         std::fs::create_dir_all(&cache_dir).expect("mkdir cache");
         std::fs::write(cache_dir.join("some_cache_file"), b"internal").expect("write cache");
         std::fs::write(dir.path().join("real.txt"), b"real content").expect("write real");
@@ -160,7 +167,10 @@ mod tests {
         // Cache dir contents must not appear
         assert!(
             store
-                .get(&format!("{}/some_cache_file", etag::ETAG_CACHE_DIR))
+                .get(&format!(
+                    "{}/some_cache_file",
+                    metadata_cache::METADATA_CACHE_DIR
+                ))
                 .is_none()
         );
     }
