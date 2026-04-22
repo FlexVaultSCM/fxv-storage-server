@@ -5,8 +5,7 @@
 use fxv_storage_server::etag;
 use fxv_storage_server::multipart_state::MULTIPART_UPLOAD_DIR;
 use md5::Digest;
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::{net::SocketAddr, path::PathBuf};
 
 // == helpers
 
@@ -15,9 +14,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
         .await
         .expect("build store");
     let app = fxv_storage_server::build_app(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
@@ -61,10 +58,7 @@ async fn test_multipart_full_flow() {
 
     // 2. UploadPart 1
     let part1_resp = client
-        .put(format!(
-            "{}/multipart.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/multipart.bin?partNumber=1&uploadId={}", base, upload_id))
         .body("hello ")
         .send()
         .await
@@ -80,10 +74,7 @@ async fn test_multipart_full_flow() {
 
     // 3. UploadPart 2
     let part2_resp = client
-        .put(format!(
-            "{}/multipart.bin?partNumber=2&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/multipart.bin?partNumber=2&uploadId={}", base, upload_id))
         .body("world")
         .send()
         .await
@@ -125,23 +116,15 @@ async fn test_multipart_full_flow() {
     assert!(final_etag.contains("-2"));
 
     // 5. GET the assembled file and verify content
-    let get_resp = reqwest::get(format!("{}/multipart.bin", base))
-        .await
-        .expect("GET");
+    let get_resp = reqwest::get(format!("{}/multipart.bin", base)).await.expect("GET");
     assert_eq!(get_resp.status(), 200);
-    assert_eq!(
-        get_resp.bytes().await.expect("body").as_ref(),
-        b"hello world"
-    );
+    assert_eq!(get_resp.bytes().await.expect("body").as_ref(), b"hello world");
 
     let rebuilt_store = fxv_storage_server::store::build_shared_store(dir.path())
         .await
         .expect("rebuild store");
     let store = rebuilt_store.read().await;
-    assert_eq!(
-        store.get("multipart.bin").expect("multipart entry").etag,
-        final_etag
-    );
+    assert_eq!(store.get("multipart.bin").expect("multipart entry").etag, final_etag);
 }
 
 /// Completing with a wrong ETag for a part should return 400.
@@ -159,10 +142,7 @@ async fn test_multipart_complete_wrong_etag_400() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     client
-        .put(format!(
-            "{}/file.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/file.bin?partNumber=1&uploadId={}", base, upload_id))
         .body("data")
         .send()
         .await
@@ -215,10 +195,7 @@ async fn test_multipart_upload_part_invalid_number() {
 
     // Part number 0 is invalid
     let resp = client
-        .put(format!(
-            "{}/file.bin?partNumber=0&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/file.bin?partNumber=0&uploadId={}", base, upload_id))
         .body("data")
         .send()
         .await
@@ -261,10 +238,7 @@ async fn test_multipart_etag_uses_s3_formula() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     let part_resp = client
-        .put(format!(
-            "{}/multipart.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/multipart.bin?partNumber=1&uploadId={}", base, upload_id))
         .body(content.as_ref())
         .send()
         .await
@@ -296,9 +270,7 @@ async fn test_multipart_etag_uses_s3_formula() {
         .await
         .expect("compute put etag");
     let expected_multipart_etag =
-        etag::multipart_etag_from_part_digests(&[etag::Md5DigestBytes::from(md5::Md5::digest(
-            content,
-        ))]);
+        etag::multipart_etag_from_part_digests(&[etag::Md5DigestBytes::from(md5::Md5::digest(content))]);
 
     assert_eq!(put_etag, expected_put_etag);
     assert_eq!(
@@ -324,10 +296,7 @@ async fn test_multipart_persists_user_metadata_headers() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     let part_resp = client
-        .put(format!(
-            "{}/meta.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/meta.bin?partNumber=1&uploadId={}", base, upload_id))
         .body("data")
         .send()
         .await
@@ -353,11 +322,7 @@ async fn test_multipart_persists_user_metadata_headers() {
         .expect("complete");
     assert_eq!(complete_resp.status(), 200);
 
-    let get_resp = client
-        .get(format!("{}/meta.bin", base))
-        .send()
-        .await
-        .expect("GET");
+    let get_resp = client.get(format!("{}/meta.bin", base)).send().await.expect("GET");
     assert_eq!(get_resp.status(), 200);
     assert_eq!(
         get_resp

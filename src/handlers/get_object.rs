@@ -1,9 +1,8 @@
-use crate::AppState;
-use crate::conditional::{self, ConditionalResult};
-use crate::metadata_cache;
-use crate::range;
-use crate::s3_xml_compat::{
-    err_internal, err_invalid_range, err_no_such_key, err_precondition_failed,
+use crate::{
+    AppState,
+    conditional::{self, ConditionalResult},
+    metadata_cache, range,
+    s3_xml_compat::{err_internal, err_invalid_range, err_no_such_key, err_precondition_failed},
 };
 use axum::{
     body::Body,
@@ -15,11 +14,7 @@ use tokio::io::AsyncSeekExt;
 use tracing::debug;
 
 /// GET /{*key} - S3 GetObject
-pub async fn get_object(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, headers: HeaderMap) -> Response {
     let store = state.store.read().await;
     let entry = match store.get(&key) {
         Some(e) => e.clone(),
@@ -82,9 +77,7 @@ pub async fn get_object(
             let mut resp = err_invalid_range();
             resp.headers_mut().insert(
                 header::CONTENT_RANGE,
-                format!("bytes */{}", entry.size)
-                    .parse()
-                    .expect("content-range"),
+                format!("bytes */{}", entry.size).parse().expect("content-range"),
             );
             return resp;
         }
@@ -122,11 +115,7 @@ pub async fn get_object(
                 "GET {} -> 206 (bytes {}-{}/{})",
                 key, range.start, range.end, entry.size
             );
-            if file
-                .seek(std::io::SeekFrom::Start(range.start))
-                .await
-                .is_err()
-            {
+            if file.seek(std::io::SeekFrom::Start(range.start)).await.is_err() {
                 return err_internal();
             }
             let limited = tokio::io::AsyncReadExt::take(file, range.len());
@@ -136,10 +125,7 @@ pub async fn get_object(
                     .status(StatusCode::PARTIAL_CONTENT)
                     .header(header::CONTENT_TYPE, "application/octet-stream")
                     .header(header::CONTENT_LENGTH, range.len().to_string())
-                    .header(
-                        header::CONTENT_RANGE,
-                        range.content_range_header(entry.size),
-                    )
+                    .header(header::CONTENT_RANGE, range.content_range_header(entry.size))
                     .header(header::ETAG, &entry.etag)
                     .header(header::LAST_MODIFIED, last_modified_str)
                     .header(header::ACCEPT_RANGES, "bytes")

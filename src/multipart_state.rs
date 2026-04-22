@@ -3,9 +3,7 @@
 /// Lives only for the duration of the server process; lost on restart.
 use crate::etag::Md5DigestBytes;
 use crate::metadata_cache::HeaderEntry;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Directory name (relative to serve_dir) used for in-progress multipart part files.

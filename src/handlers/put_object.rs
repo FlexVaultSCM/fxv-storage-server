@@ -1,11 +1,10 @@
-use crate::AppState;
-use crate::etag;
-use crate::metadata_cache::{self, ChecksumSet, ObjectMetadataCache};
-use crate::multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState};
-use crate::s3_xml_compat::{
-    err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed,
+use crate::{
+    AppState, etag,
+    metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
+    multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState},
+    s3_xml_compat::{err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed},
+    store::{FileEntry, SharedStore},
 };
-use crate::store::{FileEntry, SharedStore};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -14,8 +13,7 @@ use axum::{
 };
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use std::path::PathBuf;
-use std::time::SystemTime;
+use std::{path::PathBuf, time::SystemTime};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
@@ -249,10 +247,7 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
         }
     }
 
-    debug!(
-        "UploadPart {} part {} -> ETag {}",
-        upload_id, part_number, etag
-    );
+    debug!("UploadPart {} part {} -> ETag {}", upload_id, part_number, etag);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::ETAG, etag)

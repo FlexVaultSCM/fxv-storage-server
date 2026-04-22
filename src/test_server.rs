@@ -1,7 +1,4 @@
-use crate::errors;
-use crate::metadata_cache;
-use crate::server;
-use crate::store::SharedStore;
+use crate::{errors, metadata_cache, server, store::SharedStore};
 use std::{
     fmt,
     net::SocketAddr,
@@ -62,10 +59,7 @@ impl TestServer {
         Self::start(serve_dir, BindStrategy::Ephemeral)
     }
 
-    pub fn new_with_port_range(
-        serve_dir: &path::Path,
-        port_range: Range<u16>,
-    ) -> Result<Self, TestServerError> {
+    pub fn new_with_port_range(serve_dir: &path::Path, port_range: Range<u16>) -> Result<Self, TestServerError> {
         Self::start(serve_dir, BindStrategy::PortRange(port_range))
     }
 
@@ -81,12 +75,7 @@ impl TestServer {
         format!("http://{}", self.local_addr)
     }
 
-    pub fn add_custom_header(
-        &self,
-        path: &str,
-        key: &str,
-        value: &str,
-    ) -> Result<(), TestServerError> {
+    pub fn add_custom_header(&self, path: &str, key: &str, value: &str) -> Result<(), TestServerError> {
         let rel_path = crate::handlers::put_object::sanitize_key(path)
             .ok_or_else(|| invalid_input_error("The specified object key is invalid."))
             .map_err(TestServerError::Operation)?;
@@ -171,9 +160,7 @@ impl TestServer {
         let StartupSuccess { local_addr, store } = match startup_rx.recv_timeout(STARTUP_TIMEOUT) {
             Ok(Ok(started)) => started,
             Ok(Err(err)) => {
-                join_handle
-                    .join()
-                    .map_err(|_| TestServerError::ThreadPanicked)?;
+                join_handle.join().map_err(|_| TestServerError::ThreadPanicked)?;
                 return Err(TestServerError::Startup(err));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -203,9 +190,7 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         self.shutdown.notify_one();
         if let Some(join_handle) = self.join_handle.take() {
-            join_handle
-                .join()
-                .expect("background test server thread panicked");
+            join_handle.join().expect("background test server thread panicked");
         }
     }
 }
@@ -224,9 +209,7 @@ impl BindStrategy {
     }
 }
 
-async fn bind_first_available_port(
-    port_range: Range<u16>,
-) -> errors::Result<tokio::net::TcpListener> {
+async fn bind_first_available_port(port_range: Range<u16>) -> errors::Result<tokio::net::TcpListener> {
     for port in port_range.clone() {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         match tokio::net::TcpListener::bind(addr).await {
@@ -271,9 +254,7 @@ where
     if tokio::runtime::Handle::try_current().is_ok() {
         thread::spawn(move || Runtime::new()?.block_on(future))
             .join()
-            .map_err(|_| {
-                errors::Error::from(std::io::Error::other("metadata helper thread panicked"))
-            })?
+            .map_err(|_| errors::Error::from(std::io::Error::other("metadata helper thread panicked")))?
     } else {
         Runtime::new()?.block_on(future)
     }
@@ -290,8 +271,7 @@ mod tests {
         fs::write(dir.path().join("hello.txt"), b"hello world").expect("write");
 
         let server = TestServer::new_ephemeral(dir.path()).expect("start server");
-        let response =
-            reqwest::blocking::get(format!("{}/hello.txt", server.url())).expect("request");
+        let response = reqwest::blocking::get(format!("{}/hello.txt", server.url())).expect("request");
 
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         assert_eq!(response.text().expect("body"), "hello world");
@@ -306,8 +286,7 @@ mod tests {
         let server = TestServer::new_with_port_range(dir.path(), range.clone()).expect("start");
 
         assert!(range.contains(&server.port()));
-        let response =
-            reqwest::blocking::get(format!("{}/hello.txt", server.url())).expect("request");
+        let response = reqwest::blocking::get(format!("{}/hello.txt", server.url())).expect("request");
         assert_eq!(response.status(), reqwest::StatusCode::OK);
     }
 

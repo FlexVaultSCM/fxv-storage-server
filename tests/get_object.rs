@@ -15,9 +15,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
 
     let app = fxv_storage_server::build_app(store);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
 
     tokio::spawn(async move {
@@ -35,9 +33,7 @@ async fn test_get_existing_file_200() {
     std::fs::write(dir.path().join("hello.txt"), b"hello world").expect("write");
 
     let base = spawn_server(dir.path().to_owned()).await;
-    let resp = reqwest::get(format!("{}/hello.txt", base))
-        .await
-        .expect("GET");
+    let resp = reqwest::get(format!("{}/hello.txt", base)).await.expect("GET");
 
     assert_eq!(resp.status(), 200);
     let body = resp.bytes().await.expect("body");
@@ -48,9 +44,7 @@ async fn test_get_existing_file_200() {
 async fn test_get_missing_file_404() {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = spawn_server(dir.path().to_owned()).await;
-    let resp = reqwest::get(format!("{}/missing.txt", base))
-        .await
-        .expect("GET");
+    let resp = reqwest::get(format!("{}/missing.txt", base)).await.expect("GET");
     assert_eq!(resp.status(), 404);
 }
 
@@ -60,16 +54,11 @@ async fn test_get_returns_etag_and_last_modified() {
     std::fs::write(dir.path().join("data.bin"), b"some data").expect("write");
 
     let base = spawn_server(dir.path().to_owned()).await;
-    let resp = reqwest::get(format!("{}/data.bin", base))
-        .await
-        .expect("GET");
+    let resp = reqwest::get(format!("{}/data.bin", base)).await.expect("GET");
 
     assert_eq!(resp.status(), 200);
     let etag = resp.headers().get("etag").expect("etag header");
-    assert!(
-        etag.to_str().unwrap().starts_with('"'),
-        "ETag must be quoted"
-    );
+    assert!(etag.to_str().unwrap().starts_with('"'), "ETag must be quoted");
     assert!(
         resp.headers().contains_key("last-modified"),
         "Last-Modified must be present"
@@ -118,13 +107,7 @@ async fn test_if_none_match_304() {
         .await
         .expect("first GET");
     assert_eq!(resp1.status(), 200);
-    let etag = resp1
-        .headers()
-        .get("etag")
-        .expect("etag")
-        .to_str()
-        .unwrap()
-        .to_owned();
+    let etag = resp1.headers().get("etag").expect("etag").to_str().unwrap().to_owned();
 
     // Second request with the ETag -> 304
     let resp2 = client
@@ -159,9 +142,7 @@ async fn test_nested_path() {
     std::fs::write(dir.path().join("a/b/file.txt"), b"nested").expect("write");
 
     let base = spawn_server(dir.path().to_owned()).await;
-    let resp = reqwest::get(format!("{}/a/b/file.txt", base))
-        .await
-        .expect("GET");
+    let resp = reqwest::get(format!("{}/a/b/file.txt", base)).await.expect("GET");
     assert_eq!(resp.status(), 200);
     let body = resp.bytes().await.expect("body");
     assert_eq!(body.as_ref(), b"nested");
@@ -188,8 +169,7 @@ async fn test_custom_headers_replayed_on_206_and_304() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("custom.txt"), b"hello world").expect("write");
 
-    let server = fxv_storage_server::test_server::TestServer::new_ephemeral(dir.path())
-        .expect("start server");
+    let server = fxv_storage_server::test_server::TestServer::new_ephemeral(dir.path()).expect("start server");
     server
         .add_custom_header("custom.txt", "Content-Type", "text/plain")
         .expect("content-type header");

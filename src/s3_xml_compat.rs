@@ -30,11 +30,7 @@ pub fn s3_error(status: StatusCode, code: &str, message: &str) -> Response {
 
 // Pre-defined S3 error constructors matching the standard error codes.
 pub fn err_no_such_key() -> Response {
-    s3_error(
-        StatusCode::NOT_FOUND,
-        "NoSuchKey",
-        "The specified key does not exist.",
-    )
+    s3_error(StatusCode::NOT_FOUND, "NoSuchKey", "The specified key does not exist.")
 }
 pub fn err_no_such_upload() -> Response {
     s3_error(
@@ -144,8 +140,6 @@ pub fn to_xml_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, quick_xml::se::S
 }
 
 /// Deserialise a value from an XML byte slice.
-pub fn from_xml_bytes<T: serde::de::DeserializeOwned>(
-    bytes: &[u8],
-) -> Result<T, quick_xml::DeError> {
+pub fn from_xml_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, quick_xml::DeError> {
     quick_xml::de::from_reader(bytes)
 }

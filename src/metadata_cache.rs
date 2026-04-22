@@ -1,9 +1,10 @@
-use crate::errors::*;
-use crate::etag;
+use crate::{errors::*, etag};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tracing::{debug, warn};
 
 pub const METADATA_CACHE_DIR: &str = ".fxv-metadata-cache";
@@ -58,10 +59,7 @@ fn schema_version() -> u32 {
 
 fn cache_path(serve_dir: &Path, rel_path: &Path) -> PathBuf {
     let mut cache_file = serve_dir.join(METADATA_CACHE_DIR).join(rel_path);
-    let file_name = cache_file
-        .file_name()
-        .expect("metadata cache file name")
-        .to_os_string();
+    let file_name = cache_file.file_name().expect("metadata cache file name").to_os_string();
     let mut json_name = file_name;
     json_name.push(".json");
     cache_file.set_file_name(json_name);
@@ -69,20 +67,14 @@ fn cache_path(serve_dir: &Path, rel_path: &Path) -> PathBuf {
 }
 
 pub fn system_time_to_secs(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    time.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
 pub async fn remove_metadata_cache(serve_dir: &Path, rel_path: &Path) -> std::io::Result<()> {
     tokio::fs::remove_file(cache_path(serve_dir, rel_path)).await
 }
 
-pub async fn save_metadata_cache(
-    serve_dir: &Path,
-    rel_path: &Path,
-    metadata: &ObjectMetadataCache,
-) {
+pub async fn save_metadata_cache(serve_dir: &Path, rel_path: &Path, metadata: &ObjectMetadataCache) {
     let cache_file = cache_path(serve_dir, rel_path);
     if let Some(parent) = cache_file.parent()
         && let Err(e) = tokio::fs::create_dir_all(parent).await
@@ -104,11 +96,7 @@ pub async fn save_metadata_cache(
     }
 }
 
-async fn load_metadata_cache(
-    serve_dir: &Path,
-    rel_path: &Path,
-    file_mtime_secs: i64,
-) -> Option<ObjectMetadataCache> {
+async fn load_metadata_cache(serve_dir: &Path, rel_path: &Path, file_mtime_secs: i64) -> Option<ObjectMetadataCache> {
     let cache_file = cache_path(serve_dir, rel_path);
     let contents = tokio::fs::read(&cache_file).await.ok()?;
     let metadata: ObjectMetadataCache = serde_json::from_slice(&contents).ok()?;
@@ -120,10 +108,7 @@ async fn load_metadata_cache(
     }
 }
 
-pub async fn get_or_compute_metadata(
-    serve_dir: &Path,
-    rel_path: &Path,
-) -> Result<ObjectMetadataCache> {
+pub async fn get_or_compute_metadata(serve_dir: &Path, rel_path: &Path) -> Result<ObjectMetadataCache> {
     let abs_path = serve_dir.join(rel_path);
     let meta = tokio::fs::metadata(&abs_path).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -184,11 +169,7 @@ pub fn validate_header_entry(key: &str, value: &str) -> Result<HeaderEntry> {
     })
 }
 
-pub fn upsert_custom_header(
-    custom_headers: &mut Vec<HeaderEntry>,
-    key: &str,
-    value: &str,
-) -> Result<()> {
+pub fn upsert_custom_header(custom_headers: &mut Vec<HeaderEntry>, key: &str, value: &str) -> Result<()> {
     let entry = validate_header_entry(key, value)?;
     if let Some(existing) = custom_headers
         .iter_mut()
@@ -206,20 +187,14 @@ pub fn apply_custom_headers(headers: &mut HeaderMap, custom_headers: &[HeaderEnt
         let key = match HeaderName::from_bytes(header.key.as_bytes()) {
             Ok(key) => key,
             Err(e) => {
-                warn!(
-                    "Skipping invalid cached header name '{}': {}",
-                    header.key, e
-                );
+                warn!("Skipping invalid cached header name '{}': {}", header.key, e);
                 continue;
             }
         };
         let value = match HeaderValue::from_str(&header.value) {
             Ok(value) => value,
             Err(e) => {
-                warn!(
-                    "Skipping invalid cached header value for '{}': {}",
-                    header.key, e
-                );
+                warn!("Skipping invalid cached header value for '{}': {}", header.key, e);
                 continue;
             }
         };
@@ -251,9 +226,7 @@ mod tests {
         );
 
         save_metadata_cache(dir.path(), rel, &metadata).await;
-        let loaded = load_metadata_cache(dir.path(), rel, 123)
-            .await
-            .expect("load");
+        let loaded = load_metadata_cache(dir.path(), rel, 123).await.expect("load");
         assert_eq!(loaded, metadata);
     }
 

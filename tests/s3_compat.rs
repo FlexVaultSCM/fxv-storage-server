@@ -1,4 +1,3 @@
-use aws_sdk_s3::Client;
 /// S3 client compatibility tests.
 ///
 /// Spins up a real fxv-storage-server instance and drives it with the
@@ -14,10 +13,12 @@ use aws_sdk_s3::Client;
 /// That is intentional - this test validates wire-level compatibility,
 /// not bucket semantics.
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials, Region};
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use aws_sdk_s3::{
+    Client,
+    primitives::ByteStream,
+    types::{CompletedMultipartUpload, CompletedPart},
+};
+use std::{net::SocketAddr, path::PathBuf};
 
 const BUCKET: &str = "test-bucket";
 
@@ -28,9 +29,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
         .await
         .expect("build store");
     let app = fxv_storage_server::build_app(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
@@ -84,12 +83,7 @@ async fn s3_put_object_and_get_object() {
         .await
         .expect("GetObject");
 
-    let body = get_resp
-        .body
-        .collect()
-        .await
-        .expect("collect body")
-        .into_bytes();
+    let body = get_resp.body.collect().await.expect("collect body").into_bytes();
     assert_eq!(body.as_ref(), b"hello from s3 client");
 }
 
@@ -118,12 +112,7 @@ async fn s3_delete_object_round_trip() {
         .await
         .expect("DeleteObject");
 
-    let result = client
-        .get_object()
-        .bucket(BUCKET)
-        .key("delete-me.txt")
-        .send()
-        .await;
+    let result = client.get_object().bucket(BUCKET).key("delete-me.txt").send().await;
     assert!(result.is_err(), "Object should not exist after delete");
 }
 
@@ -136,21 +125,12 @@ async fn s3_get_object_not_found() {
     let base = spawn_server(dir.path().to_owned()).await;
     let client = s3_client(&base);
 
-    let result = client
-        .get_object()
-        .bucket(BUCKET)
-        .key("nonexistent.txt")
-        .send()
-        .await;
+    let result = client.get_object().bucket(BUCKET).key("nonexistent.txt").send().await;
 
     assert!(result.is_err(), "Expected error for missing key");
     let err = result.unwrap_err();
     let svc_err = err.as_service_error().expect("expected service error");
-    assert!(
-        svc_err.is_no_such_key(),
-        "Expected NoSuchKey, got: {:?}",
-        svc_err
-    );
+    assert!(svc_err.is_no_such_key(), "Expected NoSuchKey, got: {:?}", svc_err);
 }
 
 // == GetObject: ETag conditional (If-None-Match)
@@ -318,18 +298,8 @@ async fn s3_multipart_upload_full_flow() {
 
     // 4. CompleteMultipartUpload
     let completed = CompletedMultipartUpload::builder()
-        .parts(
-            CompletedPart::builder()
-                .part_number(1)
-                .e_tag(&etag1)
-                .build(),
-        )
-        .parts(
-            CompletedPart::builder()
-                .part_number(2)
-                .e_tag(&etag2)
-                .build(),
-        )
+        .parts(CompletedPart::builder().part_number(1).e_tag(&etag1).build())
+        .parts(CompletedPart::builder().part_number(2).e_tag(&etag2).build())
         .build();
 
     let complete = client
@@ -406,11 +376,6 @@ async fn s3_abort_multipart_upload() {
         .expect("AbortMultipartUpload");
 
     // Object should not exist
-    let result = client
-        .get_object()
-        .bucket(BUCKET)
-        .key("abortable.bin")
-        .send()
-        .await;
+    let result = client.get_object().bucket(BUCKET).key("abortable.bin").send().await;
     assert!(result.is_err(), "Object should not exist after abort");
 }

@@ -1,13 +1,13 @@
-use crate::AppState;
-use crate::etag;
-use crate::metadata_cache::{self, ChecksumSet, ObjectMetadataCache};
-use crate::multipart_state::UploadEntry;
-use crate::s3_xml_compat::{
-    CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
-    err_internal, err_invalid_argument, err_invalid_part, err_malformed_xml, err_no_such_upload,
-    from_xml_bytes, to_xml_bytes,
+use crate::{
+    AppState, etag,
+    metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
+    multipart_state::UploadEntry,
+    s3_xml_compat::{
+        CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult, err_internal,
+        err_invalid_argument, err_invalid_part, err_malformed_xml, err_no_such_upload, from_xml_bytes, to_xml_bytes,
+    },
+    store::FileEntry,
 };
-use crate::store::FileEntry;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -18,8 +18,7 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::time::SystemTime;
+use std::{collections::HashMap, time::SystemTime};
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
@@ -86,12 +85,7 @@ async fn create_multipart_upload(state: AppState, key: String, headers: HeaderMa
 }
 
 /// CompleteMultipartUpload: assemble parts atomically, update store.
-async fn complete_multipart_upload(
-    state: AppState,
-    key: String,
-    upload_id: String,
-    body: Body,
-) -> Response {
+async fn complete_multipart_upload(state: AppState, key: String, upload_id: String, body: Body) -> Response {
     // Collect request body
     let body_bytes = match collect_body(body).await {
         Ok(b) => b,
@@ -268,11 +262,7 @@ async fn assemble_parts(
 }
 
 /// AbortMultipartUpload: clean up all temp files and remove upload state.
-pub(crate) async fn abort_multipart_upload(
-    state: AppState,
-    key: String,
-    upload_id: String,
-) -> Response {
+pub(crate) async fn abort_multipart_upload(state: AppState, key: String, upload_id: String) -> Response {
     let mut uploads = state.uploads.write().await;
     match uploads.remove(&upload_id) {
         Some(entry) if entry.key == key => {

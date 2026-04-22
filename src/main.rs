@@ -29,11 +29,7 @@ async fn main() {
     let cli = Cli::parse();
 
     let serve_dir = cli.serve_dir.canonicalize().unwrap_or_else(|e| {
-        eprintln!(
-            "Cannot resolve serve-dir '{}': {}",
-            cli.serve_dir.display(),
-            e
-        );
+        eprintln!("Cannot resolve serve-dir '{}': {}", cli.serve_dir.display(), e);
         std::process::exit(1);
     });
 

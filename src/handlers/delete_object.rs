@@ -1,7 +1,8 @@
-use crate::AppState;
-use crate::metadata_cache;
-use crate::s3_xml_compat::{err_internal, err_invalid_argument};
-use crate::store::SharedStore;
+use crate::{
+    AppState, metadata_cache,
+    s3_xml_compat::{err_internal, err_invalid_argument},
+    store::SharedStore,
+};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -25,9 +26,7 @@ pub async fn delete_dispatch(
     _headers: HeaderMap,
 ) -> Response {
     match params.upload_id {
-        Some(upload_id) => {
-            crate::handlers::multipart::abort_multipart_upload(state, key, upload_id).await
-        }
+        Some(upload_id) => crate::handlers::multipart::abort_multipart_upload(state, key, upload_id).await,
         None => delete_object(state.store, key).await,
     }
 }
@@ -56,10 +55,7 @@ async fn delete_object(store: SharedStore, key: String) -> Response {
     if let Err(e) = metadata_cache::remove_metadata_cache(&serve_dir, &rel_path).await
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        warn!(
-            "DeleteObject metadata cleanup for {:?} failed: {}",
-            rel_path, e
-        );
+        warn!("DeleteObject metadata cleanup for {:?} failed: {}", rel_path, e);
     }
     store.remove(&key);
 

@@ -1,10 +1,14 @@
-use crate::errors::*;
-use crate::metadata_cache::{self, ChecksumSet, HeaderEntry};
-use crate::multipart_state;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::SystemTime;
+use crate::{
+    errors::*,
+    metadata_cache::{self, ChecksumSet, HeaderEntry},
+    multipart_state,
+};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
@@ -77,10 +81,10 @@ async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEnt
 
         if file_type.is_dir() {
             // Skip metadata and multipart internal directories
-            if path.file_name().is_some_and(|n| {
-                n == metadata_cache::METADATA_CACHE_DIR
-                    || n == multipart_state::MULTIPART_UPLOAD_DIR
-            }) {
+            if path
+                .file_name()
+                .is_some_and(|n| n == metadata_cache::METADATA_CACHE_DIR || n == multipart_state::MULTIPART_UPLOAD_DIR)
+            {
                 continue;
             }
             // Recurse - Box the future to avoid infinite-size type
@@ -167,10 +171,7 @@ mod tests {
         // Cache dir contents must not appear
         assert!(
             store
-                .get(&format!(
-                    "{}/some_cache_file",
-                    metadata_cache::METADATA_CACHE_DIR
-                ))
+                .get(&format!("{}/some_cache_file", metadata_cache::METADATA_CACHE_DIR))
                 .is_none()
         );
     }
@@ -187,10 +188,7 @@ mod tests {
         assert!(store.get("real.txt").is_some());
         assert!(
             store
-                .get(&format!(
-                    "{}/part-abc-1.fxv_tmp",
-                    multipart_state::MULTIPART_UPLOAD_DIR
-                ))
+                .get(&format!("{}/part-abc-1.fxv_tmp", multipart_state::MULTIPART_UPLOAD_DIR))
                 .is_none()
         );
     }

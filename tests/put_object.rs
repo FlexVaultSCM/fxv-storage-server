@@ -14,9 +14,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
 
     let app = fxv_storage_server::build_app(store);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
 
     tokio::spawn(async move {
@@ -56,14 +54,9 @@ async fn test_put_new_file_200_and_readable() {
     );
 
     // Verify the file is readable via GET
-    let get_resp = reqwest::get(format!("{}/newfile.txt", base))
-        .await
-        .expect("GET");
+    let get_resp = reqwest::get(format!("{}/newfile.txt", base)).await.expect("GET");
     assert_eq!(get_resp.status(), 200);
-    assert_eq!(
-        get_resp.bytes().await.expect("body").as_ref(),
-        b"hello from put"
-    );
+    assert_eq!(get_resp.bytes().await.expect("body").as_ref(), b"hello from put");
 }
 
 /// Overwrite: PUT to an existing key replaces the content.
@@ -143,13 +136,7 @@ async fn test_put_if_match_correct_etag_200() {
         .await
         .expect("PUT1");
     assert_eq!(put1.status(), 200);
-    let etag = put1
-        .headers()
-        .get("etag")
-        .expect("etag")
-        .to_str()
-        .unwrap()
-        .to_owned();
+    let etag = put1.headers().get("etag").expect("etag").to_str().unwrap().to_owned();
 
     // Second PUT with If-Match matching the ETag
     let put2 = client
@@ -259,11 +246,7 @@ async fn test_put_persists_user_metadata_headers() {
         .expect("PUT");
     assert_eq!(put_resp.status(), 200);
 
-    let get_resp = client
-        .get(format!("{}/meta.txt", base))
-        .send()
-        .await
-        .expect("GET");
+    let get_resp = client.get(format!("{}/meta.txt", base)).send().await.expect("GET");
     assert_eq!(get_resp.status(), 200);
     assert_eq!(
         get_resp

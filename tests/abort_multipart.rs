@@ -7,9 +7,7 @@ async fn spawn_server(serve_dir: PathBuf) -> String {
         .await
         .expect("build store");
     let app = fxv_storage_server::build_app(store);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
@@ -41,10 +39,7 @@ async fn test_abort_multipart_upload_204() {
 
     // Upload a part
     client
-        .put(format!(
-            "{}/abortable.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/abortable.bin?partNumber=1&uploadId={}", base, upload_id))
         .body("some data")
         .send()
         .await
@@ -100,10 +95,7 @@ async fn test_delete_without_upload_id_does_not_abort_upload() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     let part_resp = client
-        .put(format!(
-            "{}/file.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/file.bin?partNumber=1&uploadId={}", base, upload_id))
         .body("data")
         .send()
         .await
@@ -152,10 +144,7 @@ async fn test_abort_does_not_create_file() {
     let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
 
     client
-        .put(format!(
-            "{}/ghost.bin?partNumber=1&uploadId={}",
-            base, upload_id
-        ))
+        .put(format!("{}/ghost.bin?partNumber=1&uploadId={}", base, upload_id))
         .body("phantom data")
         .send()
         .await
@@ -168,8 +157,6 @@ async fn test_abort_does_not_create_file() {
         .expect("abort");
 
     // The file should not be accessible
-    let get_resp = reqwest::get(format!("{}/ghost.bin", base))
-        .await
-        .expect("GET");
+    let get_resp = reqwest::get(format!("{}/ghost.bin", base)).await.expect("GET");
     assert_eq!(get_resp.status(), 404);
 }
