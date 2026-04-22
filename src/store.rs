@@ -1,5 +1,6 @@
 use crate::errors::*;
 use crate::etag;
+use crate::multipart_state;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -72,11 +73,9 @@ async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEnt
 
         if file_type.is_dir() {
             // Skip the ETag cache directory
-            if path
-                .file_name()
-                .map(|n| n == etag::ETAG_CACHE_DIR)
-                .unwrap_or(false)
-            {
+            if path.file_name().is_some_and(|n| {
+                n == etag::ETAG_CACHE_DIR || n == multipart_state::MULTIPART_UPLOAD_DIR
+            }) {
                 continue;
             }
             // Recurse - Box the future to avoid infinite-size type
@@ -162,6 +161,26 @@ mod tests {
         assert!(
             store
                 .get(&format!("{}/some_cache_file", etag::ETAG_CACHE_DIR))
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_store_skips_multipart_upload_dir() {
+        let dir = TempDir::new().expect("tempdir");
+        let multipart_dir = dir.path().join(multipart_state::MULTIPART_UPLOAD_DIR);
+        std::fs::create_dir_all(&multipart_dir).expect("mkdir multipart");
+        std::fs::write(multipart_dir.join("part-abc-1.fxv_tmp"), b"internal").expect("write part");
+        std::fs::write(dir.path().join("real.txt"), b"real content").expect("write real");
+
+        let store = FileStore::build(dir.path()).await.expect("build");
+        assert!(store.get("real.txt").is_some());
+        assert!(
+            store
+                .get(&format!(
+                    "{}/part-abc-1.fxv_tmp",
+                    multipart_state::MULTIPART_UPLOAD_DIR
+                ))
                 .is_none()
         );
     }

@@ -3,6 +3,7 @@
 /// Spins up a full fxv-storage-server instance and tests the full
 /// CreateMultipartUpload -> UploadPart x N -> CompleteMultipartUpload flow.
 use fxv_storage_server::etag;
+use fxv_storage_server::multipart_state::MULTIPART_UPLOAD_DIR;
 use md5::Digest;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -95,6 +96,15 @@ async fn test_multipart_full_flow() {
         .to_str()
         .unwrap()
         .to_owned();
+    let multipart_dir = dir.path().join(MULTIPART_UPLOAD_DIR);
+    assert!(multipart_dir.exists(), "multipart temp dir should exist");
+    assert!(
+        std::fs::read_dir(&multipart_dir)
+            .expect("read multipart dir")
+            .next()
+            .is_some(),
+        "multipart temp dir should contain uploaded part files"
+    );
 
     // 4. CompleteMultipartUpload
     let complete_xml = format!(

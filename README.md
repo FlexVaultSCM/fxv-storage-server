@@ -23,6 +23,7 @@
 - **Range requests**: Single-range requests supported (S3 constraint: no multi-range).
 - **Content-Type**: Always `application/octet-stream`.
 - **ETag cache**: Precomputed ETags are cached in `.fxv-etag-cache/` inside the serve directory to avoid re-hashing on restart.
+- **Multipart temp storage**: In-progress uploaded parts live under `.fxv-multipart-uploads/`, separate from the ETag cache.
 
 ## Usage
 

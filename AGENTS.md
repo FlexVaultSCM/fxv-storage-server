@@ -25,7 +25,7 @@ no bucket management.
 | GetObject | `GET /{*key}` | Full and range responses; conditional headers; streaming |
 | PutObject | `PUT /{*key}` | Atomic via temp-file + rename; conditional headers |
 | CreateMultipartUpload | `POST /{*key}?uploads` | Returns XML upload ID |
-| UploadPart | `PUT /{*key}?partNumber=N&uploadId=X` | Parts stored in `.fxv-etag-cache/` |
+| UploadPart | `PUT /{*key}?partNumber=N&uploadId=X` | Parts stored in `.fxv-multipart-uploads/` |
 | CompleteMultipartUpload | `POST /{*key}?uploadId=X` | Assembles parts atomically; XML body |
 | DeleteObject | `DELETE /{*key}` | Idempotent 204 delete; clears store/cache entry |
 | AbortMultipartUpload | `DELETE /{*key}?uploadId=X` | Cleans up temp part files |
@@ -50,7 +50,7 @@ src/
   conditional.rs       - RFC 7232 If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since
   range.rs             - Range header parsing, ByteRange, content_range_header()
   s3_xml_compat.rs     - quick-xml+serde types for multipart XML; S3 error response helpers
-  multipart_state.rs   - SharedUploadState = Arc<RwLock<HashMap<uploadId, UploadEntry>>>
+  multipart_state.rs   - SharedUploadState = Arc<RwLock<HashMap<uploadId, UploadEntry>>> + multipart temp dir constant
   handlers/
     delete_object.rs   - DeleteObject + AbortMultipartUpload DELETE dispatch
     get_object.rs      - GetObject: 200, 206, 304, 412, 416
@@ -128,7 +128,7 @@ file.
 | Multipart ETag | S3 multipart formula (`md5(part-md5s)-N`) | Matches S3 semantics |
 | `tower-http::ServeDir` | Rejected | No ETag support; incompatible with conditional header requirements |
 | Multipart state persistence | None (in-memory only) | Lost on restart - acceptable for our use case |
-| Part temp storage | `<serve_dir>/.fxv-etag-cache/part-<id>-<n>.fxv_tmp` | Co-located with ETag cache |
+| Part temp storage | `<serve_dir>/.fxv-multipart-uploads/part-<id>-<n>.fxv_tmp` | Keeps upload scratch data separate from cached ETags |
 | Content-Type | Always `application/octet-stream` | No MIME detection needed |
 | Bucket concept | None | Bucket name is absorbed into the key path |
 | `If-Match: *` on PutObject | "object must exist, any ETag OK" -> 412 if missing | Matches S3 behaviour |

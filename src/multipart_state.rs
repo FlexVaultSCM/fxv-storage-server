@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Directory name (relative to serve_dir) used for in-progress multipart part files.
+pub const MULTIPART_UPLOAD_DIR: &str = ".fxv-multipart-uploads";
+
 /// Metadata for a single uploaded part.
 #[derive(Debug, Clone)]
 pub struct PartEntry {

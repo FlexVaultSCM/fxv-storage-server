@@ -1,6 +1,6 @@
 use crate::AppState;
 use crate::etag;
-use crate::multipart_state::{PartEntry, SharedUploadState};
+use crate::multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState};
 use crate::s3_xml_compat::{
     err_internal, err_invalid_argument, err_no_such_upload, err_precondition_failed,
 };
@@ -203,9 +203,9 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
 
     // Determine temp directory: same serve_dir as the store
     let serve_dir = state.store.read().await.serve_dir().to_owned();
-    let cache_dir = serve_dir.join(etag::ETAG_CACHE_DIR);
-    let _ = tokio::fs::create_dir_all(&cache_dir).await;
-    let tmp_path = cache_dir.join(format!("part-{}-{}.fxv_tmp", upload_id, part_number));
+    let multipart_dir = serve_dir.join(MULTIPART_UPLOAD_DIR);
+    let _ = tokio::fs::create_dir_all(&multipart_dir).await;
+    let tmp_path = multipart_dir.join(format!("part-{}-{}.fxv_tmp", upload_id, part_number));
 
     let write_result = write_body_to_temp(&tmp_path, body).await;
     let (size, etag, md5_bytes, _) = match write_result {
