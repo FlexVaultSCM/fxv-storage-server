@@ -1,5 +1,5 @@
 [package]
-name = "fxv-storage-server"
+name = "fxv_storage_server"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
