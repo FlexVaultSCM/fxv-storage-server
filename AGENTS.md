@@ -41,12 +41,14 @@ GetBucketLocation, versioning, ACLs, presigned URLs, CORS, lifecycle policies.
 
 ```
 src/
-  main.rs              - CLI (clap), TcpListener with TCP_NODELAY, axum::serve
+  main.rs              - CLI (clap) entrypoint wired through the shared server runner
   lib.rs               - AppState, build_app(), exports all modules
   config.rs            - Config struct (serve_dir, port)
   errors.rs            - error_chain! error types
   store.rs             - FileStore: HashMap<key, FileEntry>, SharedStore = Arc<RwLock<FileStore>>
   etag.rs              - MD5 and multipart ETag helpers; .fxv-etag-cache/ disk cache
+  server.rs            - Shared async bootstrap helpers: build app, bind listener, serve with shutdown
+  test_server.rs       - Blocking RAII helper for spinning up the server in synchronous tests
   conditional.rs       - RFC 7232 If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since
   range.rs             - Range header parsing, ByteRange, content_range_header()
   s3_xml_compat.rs     - quick-xml+serde types for multipart XML; S3 error response helpers
@@ -116,7 +118,17 @@ file.
 ### TCP_NODELAY
 
 `TCP_NODELAY` is set on every accepted connection via `axum::serve::ListenerExt::tap_io` in
-`main.rs`, reducing latency for small request/response exchanges.
+the shared server runner, reducing latency for small request/response exchanges.
+
+### Embedded test usage
+
+- The crate is already consumable as a library via `src/lib.rs`; no special Cargo target split is
+  required for test code to depend on it.
+- `test_server::TestServer` is the blocking-friendly helper for synchronous tests. It owns a
+  background thread, creates its own Tokio runtime, exposes `url()` / `port()`, and shuts down on
+  `Drop`.
+- The CLI and the test helper should stay wired through `server.rs` so listener binding, app
+  construction, and shutdown behavior remain aligned.
 
 ---
 

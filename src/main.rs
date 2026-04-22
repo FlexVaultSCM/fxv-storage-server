@@ -1,9 +1,6 @@
-use axum::serve::ListenerExt as _;
 use clap::Parser;
-use fxv_storage_server::{build_app, config::Config, store};
-use std::net::SocketAddr;
+use fxv_storage_server::{config::Config, server};
 use std::path::PathBuf;
-use tracing::info;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -40,38 +37,15 @@ async fn main() {
         std::process::exit(1);
     });
 
-    let _config = Config {
+    let config = Config {
         serve_dir: serve_dir.clone(),
         port: cli.port,
     };
 
-    info!("Building file index from {:?}", serve_dir);
-    let shared_store = store::build_shared_store(&serve_dir)
+    server::run_with_shutdown(&config, std::future::pending())
         .await
         .unwrap_or_else(|e| {
-            eprintln!("Failed to build file index: {}", e);
+            eprintln!("Server failed: {}", e);
             std::process::exit(1);
         });
-
-    let app = build_app(shared_store);
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], cli.port));
-    info!("Listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to bind {}: {}", addr, e);
-            std::process::exit(1);
-        });
-
-    axum::serve(
-        listener.tap_io(|stream| {
-            if let Err(e) = stream.set_nodelay(true) {
-                tracing::warn!("Failed to set TCP_NODELAY: {}", e);
-            }
-        }),
-        app,
-    )
-    .await
-    .expect("server error");
 }

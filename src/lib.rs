@@ -7,7 +7,9 @@ pub mod handlers;
 pub mod multipart_state;
 pub mod range;
 pub mod s3_xml_compat;
+pub mod server;
 pub mod store;
+pub mod test_server;
 
 use axum::Router;
 use handlers::{

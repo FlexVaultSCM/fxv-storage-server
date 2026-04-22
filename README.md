@@ -31,6 +31,20 @@
 fxv-storage-server --serve-dir /path/to/files --port 3000
 ```
 
+## Library usage in tests
+
+This crate already exposes a library target via `src/lib.rs`, so test code can
+depend on it directly and spin up a real server without already running inside
+Tokio.
+
+```rust
+let server = fxv_storage_server::test_server::TestServer::new_ephemeral(serve_dir.path())?;
+let base_url = server.url();
+```
+
+`TestServer` owns a background thread plus its own Tokio runtime and shuts the
+server down automatically on drop.
+
 ## Building
 
 Requires the Rust **nightly** toolchain (see `rust-toolchain.toml`).
