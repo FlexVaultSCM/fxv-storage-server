@@ -16,7 +16,7 @@ pub struct FileEntry {
     pub size: u64,
     /// Last-modified time.
     pub modified: SystemTime,
-    /// Pre-computed BLAKE3 ETag (double-quoted hex string).
+    /// Pre-computed ETag (double-quoted string).
     pub etag: String,
 }
 
@@ -57,7 +57,6 @@ impl FileStore {
     }
 
     /// Remove an entry.
-    #[allow(dead_code)]
     pub fn remove(&mut self, key: &str) {
         self.entries.remove(key);
     }

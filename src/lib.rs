@@ -11,8 +11,7 @@ pub mod store;
 
 use axum::Router;
 use handlers::{
-    get_object::get_object,
-    multipart::{delete_dispatch, post_dispatch},
+    delete_object::delete_dispatch, get_object::get_object, multipart::post_dispatch,
     put_object::put_dispatch,
 };
 use multipart_state::{SharedUploadState, new_shared_upload_state};

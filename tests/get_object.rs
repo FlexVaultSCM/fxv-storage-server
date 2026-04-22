@@ -145,10 +145,7 @@ async fn test_if_match_412_on_mismatch() {
     let client = reqwest::Client::new();
     let resp = client
         .get(format!("{}/file.bin", base))
-        .header(
-            "If-Match",
-            "\"wrongetag000000000000000000000000000000000000000000000000000000000000\"",
-        )
+        .header("If-Match", "\"00000000000000000000000000000000\"")
         .send()
         .await
         .expect("GET");

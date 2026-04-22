@@ -27,10 +27,11 @@ no bucket management.
 | CreateMultipartUpload | `POST /{*key}?uploads` | Returns XML upload ID |
 | UploadPart | `PUT /{*key}?partNumber=N&uploadId=X` | Parts stored in `.fxv-etag-cache/` |
 | CompleteMultipartUpload | `POST /{*key}?uploadId=X` | Assembles parts atomically; XML body |
+| DeleteObject | `DELETE /{*key}` | Idempotent 204 delete; clears store/cache entry |
 | AbortMultipartUpload | `DELETE /{*key}?uploadId=X` | Cleans up temp part files |
 
 **Not implemented** (and not planned): ListObjects, HeadObject, HeadBucket, CreateBucket,
-DeleteObject, GetBucketLocation, versioning, ACLs, presigned URLs, CORS, lifecycle policies.
+GetBucketLocation, versioning, ACLs, presigned URLs, CORS, lifecycle policies.
 
 ---
 
@@ -45,21 +46,23 @@ src/
   config.rs            - Config struct (serve_dir, port)
   errors.rs            - error_chain! error types
   store.rs             - FileStore: HashMap<key, FileEntry>, SharedStore = Arc<RwLock<FileStore>>
-  etag.rs              - BLAKE3 ETag computation; .fxv-etag-cache/ disk cache
+  etag.rs              - MD5 and multipart ETag helpers; .fxv-etag-cache/ disk cache
   conditional.rs       - RFC 7232 If-Match / If-None-Match / If-Modified-Since / If-Unmodified-Since
   range.rs             - Range header parsing, ByteRange, content_range_header()
   s3_xml_compat.rs     - quick-xml+serde types for multipart XML; S3 error response helpers
   multipart_state.rs   - SharedUploadState = Arc<RwLock<HashMap<uploadId, UploadEntry>>>
   handlers/
+    delete_object.rs   - DeleteObject + AbortMultipartUpload DELETE dispatch
     get_object.rs      - GetObject: 200, 206, 304, 412, 416
     put_object.rs      - PutObject + UploadPart dispatch; sanitize_key()
-    multipart.rs       - CreateMultipartUpload, CompleteMultipartUpload, AbortMultipartUpload
+    multipart.rs       - CreateMultipartUpload, CompleteMultipartUpload, AbortMultipartUpload internals
 tests/
+  delete_object.rs     - 3 integration tests
   get_object.rs        - 8 integration tests
   put_object.rs        - 9 integration tests
   multipart.rs         - 5 integration tests
   abort_multipart.rs   - 4 integration tests
-  s3_compat.rs         - 7 integration tests using the aws-sdk-s3 client
+  s3_compat.rs         - 8 integration tests using the aws-sdk-s3 client
 test_scripts/
   rclone_test.py       - Python integration test using rclone as an S3 client (see below)
 ```
@@ -81,12 +84,13 @@ pub struct AppState {
 
 ### ETag Strategy
 
-- BLAKE3 hash of file content, hex-encoded, double-quoted wire format: `"<64 hex chars>"`
+- MD5 hash of file content for normal objects, hex-encoded, double-quoted wire format: `"<32 hex chars>"`
+- Completed multipart uploads use the S3 multipart ETag form: `"<32 hex chars>-<part count>"`
 - Computed during upload (streaming) - no post-write re-read needed
 - Cached to disk at `<serve_dir>/.fxv-etag-cache/<rel/path/to/file>` as `"<mtime_secs> <etag>"`
 - Cache is mtime-invalidated: if file mtime changes, ETag is recomputed
-- **Not MD5**: rclone and AWS clients only treat ETags as MD5 when they are exactly 32 hex chars;
-  64-char BLAKE3 ETags are treated as opaque identifiers - no checksum comparison is attempted
+- Multipart ETags are preserved across restart via the on-disk cache; if the cache is missing, startup
+  can only recompute a whole-object MD5 from bytes on disk because multipart part boundaries are gone
 
 ### Atomic Writes
 
@@ -120,8 +124,8 @@ file.
 
 | Decision | Choice | Reason |
 |---|---|---|
-| ETag hash | BLAKE3 (not MD5) | Speed; S3 clients treat 64-char ETags as opaque |
-| Multipart ETag | BLAKE3 of assembled file | Consistency with PutObject |
+| ETag hash | MD5 | Better alignment with S3 and client checksum expectations |
+| Multipart ETag | S3 multipart formula (`md5(part-md5s)-N`) | Matches S3 semantics |
 | `tower-http::ServeDir` | Rejected | No ETag support; incompatible with conditional header requirements |
 | Multipart state persistence | None (in-memory only) | Lost on restart - acceptable for our use case |
 | Part temp storage | `<serve_dir>/.fxv-etag-cache/part-<id>-<n>.fxv_tmp` | Co-located with ETag cache |
@@ -156,7 +160,7 @@ Flags confirmed **not** required (and therefore absent from the script):
 
 | Flag | Why not needed |
 |---|---|
-| `--ignore-checksum` | BLAKE3 ETags are 64 hex chars; rclone only compares as MD5 when length == 32 |
+| `--ignore-checksum` | MD5 ETags now align with rclone's normal checksum handling |
 | `--s3-disable-checksum` | Server ignores `Content-MD5` header entirely |
 | `--s3-no-head` | HEAD requests work correctly; Axum auto-strips body for HEAD on GET routes |
 
@@ -172,8 +176,8 @@ as the remote path.
 
 ## S3 Client Compatibility Tests (`tests/s3_compat.rs`)
 
-Uses `aws-sdk-s3` directly. Tests: GetObject 404, GetObject round-trip, GetObject range,
-GetObject If-None-Match 304, PutObject If-None-Match prevents overwrite,
+Uses `aws-sdk-s3` directly. Tests: GetObject 404, GetObject round-trip, DeleteObject round-trip,
+GetObject range, GetObject If-None-Match 304, PutObject If-None-Match prevents overwrite,
 full multipart flow, AbortMultipartUpload.
 
 ---
@@ -227,7 +231,7 @@ or emphasis.
 | `tower` | 0.5 | Middleware |
 | `tower-http` | 0.6 (trace) | HTTP tracing layer |
 | `clap` | 4 (derive) | CLI argument parsing |
-| `blake3` | 1 | BLAKE3 hashing for ETags |
+| `md-5` | 0.10 | MD5 hashing for ETags |
 | `error-chain` | 0.12.4 | Structured error types |
 | `tracing` | 0.1.41 | Instrumentation |
 | `tracing-subscriber` | 0.3.20 | Log subscriber |

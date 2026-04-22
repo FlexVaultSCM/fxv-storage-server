@@ -1,6 +1,7 @@
 /// In-memory state for multipart uploads.
 ///
 /// Lives only for the duration of the server process; lost on restart.
+use crate::etag::Md5DigestBytes;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,8 +14,10 @@ pub struct PartEntry {
     pub abs_path: PathBuf,
     /// Number of bytes in this part.
     pub size: u64,
-    /// BLAKE3 ETag of this part's data (double-quoted hex string).
+    /// MD5 ETag of this part's data (double-quoted hex string).
     pub etag: String,
+    /// Raw MD5 digest bytes used to build S3 multipart ETags.
+    pub md5_bytes: Md5DigestBytes,
 }
 
 /// State for one in-progress multipart upload.

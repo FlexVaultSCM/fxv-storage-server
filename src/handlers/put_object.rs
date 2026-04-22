@@ -11,6 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::Response,
 };
+use md5::{Digest, Md5};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -101,7 +102,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
 
     let write_result = write_body_to_temp(&tmp_path, body).await;
 
-    let (tmp_size, etag, modified) = match write_result {
+    let (tmp_size, etag, _, modified) = match write_result {
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to write temp file {:?}: {}", tmp_path, e);
@@ -202,12 +203,12 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
 
     // Determine temp directory: same serve_dir as the store
     let serve_dir = state.store.read().await.serve_dir().to_owned();
-    let cache_dir = serve_dir.join(".fxv-etag-cache");
+    let cache_dir = serve_dir.join(etag::ETAG_CACHE_DIR);
     let _ = tokio::fs::create_dir_all(&cache_dir).await;
     let tmp_path = cache_dir.join(format!("part-{}-{}.fxv_tmp", upload_id, part_number));
 
     let write_result = write_body_to_temp(&tmp_path, body).await;
-    let (size, etag, _) = match write_result {
+    let (size, etag, md5_bytes, _) = match write_result {
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to write part temp file {:?}: {}", tmp_path, e);
@@ -230,6 +231,7 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
                     abs_path: tmp_path,
                     size,
                     etag: etag.clone(),
+                    md5_bytes,
                 },
             );
         }
@@ -250,16 +252,16 @@ async fn upload_part(state: AppState, key: String, params: PutParams, body: Body
 #[allow(dead_code)]
 pub(crate) type Uploads = SharedUploadState;
 
-/// Stream `body` into `tmp_path`, computing BLAKE3 and capturing metadata.
-/// Returns `(file_size, etag, modified_time)`.
+/// Stream `body` into `tmp_path`, computing MD5 and capturing metadata.
+/// Returns `(file_size, etag, digest_bytes, modified_time)`.
 async fn write_body_to_temp(
     tmp_path: &std::path::Path,
     body: Body,
-) -> std::io::Result<(u64, String, SystemTime)> {
+) -> std::io::Result<(u64, String, etag::Md5DigestBytes, SystemTime)> {
     use http_body_util::BodyExt;
 
     let mut file = tokio::fs::File::create(tmp_path).await?;
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = Md5::new();
     let mut total_bytes: u64 = 0;
 
     let mut body = body;
@@ -277,9 +279,10 @@ async fn write_body_to_temp(
 
     let meta = tokio::fs::metadata(tmp_path).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let etag = etag::etag_from_hash(hasher.finalize());
+    let digest: etag::Md5DigestBytes = hasher.finalize().into();
+    let etag = etag::etag_from_digest_bytes(&digest);
 
-    Ok((total_bytes, etag, modified))
+    Ok((total_bytes, etag, digest, modified))
 }
 
 /// Validate a key string and return a `PathBuf` that is safe to join with the serve directory.

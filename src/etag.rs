@@ -1,4 +1,5 @@
 use crate::errors::*;
+use md5::{Digest, Md5};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, warn};
@@ -6,11 +7,13 @@ use tracing::{debug, warn};
 /// Directory name (relative to serve_dir) used to persist ETag cache files.
 pub const ETAG_CACHE_DIR: &str = ".fxv-etag-cache";
 
-/// Compute a BLAKE3 ETag for the given file path by streaming its contents.
+pub type Md5DigestBytes = [u8; 16];
+
+/// Compute an MD5 ETag for the given file path by streaming its contents.
 /// Returns a hex-encoded string wrapped in double quotes (the ETag wire format).
 pub async fn compute_file_etag(path: &Path) -> Result<String> {
     let mut file = tokio::fs::File::open(path).await?;
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = Md5::new();
     let mut buf = vec![0u8; 65536];
     loop {
         let n = file.read(&mut buf).await?;
@@ -19,20 +22,45 @@ pub async fn compute_file_etag(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("\"{}\"", hasher.finalize().to_hex()))
+    let digest: Md5DigestBytes = hasher.finalize().into();
+    Ok(etag_from_digest_bytes(&digest))
 }
 
-/// Compute a BLAKE3 ETag from an already-accumulated hasher output.
-/// Returns the ETag wire format string (hex, double-quoted).
-#[allow(dead_code)]
-pub fn etag_from_hash(hash: blake3::Hash) -> String {
-    format!("\"{}\"", hash.to_hex())
+/// Render an MD5 digest as a quoted ETag string.
+pub fn etag_from_digest_bytes(digest: &Md5DigestBytes) -> String {
+    format!("\"{}\"", hex_encode(digest))
+}
+
+/// Compute a multipart ETag using the S3 algorithm:
+/// `md5(concat(binary_part_md5s)) + "-" + part_count`.
+pub fn multipart_etag_from_part_digests(part_digests: &[Md5DigestBytes]) -> String {
+    let mut hasher = Md5::new();
+    for digest in part_digests {
+        hasher.update(digest);
+    }
+    let digest: Md5DigestBytes = hasher.finalize().into();
+    format!("\"{}-{}\"", hex_encode(&digest), part_digests.len())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Returns the cache file path for a given serve-dir-relative key path.
 /// Cache files live in `<serve_dir>/.fxv-etag-cache/<key_path>`.
 fn cache_path(serve_dir: &Path, rel_path: &Path) -> PathBuf {
     serve_dir.join(ETAG_CACHE_DIR).join(rel_path)
+}
+
+/// Remove the cached ETag file for a given serve-dir-relative path.
+pub async fn remove_cached_etag(serve_dir: &Path, rel_path: &Path) -> std::io::Result<()> {
+    tokio::fs::remove_file(cache_path(serve_dir, rel_path)).await
 }
 
 /// Attempt to load a cached ETag for a file.
@@ -79,7 +107,7 @@ pub async fn save_cached_etag(serve_dir: &Path, rel_path: &Path, file_mtime_secs
     }
 }
 
-/// Compute (or load from cache) the BLAKE3 ETag for a file.
+/// Compute (or load from cache) the MD5 ETag for a file.
 /// `rel_path` is the path relative to `serve_dir`.
 pub async fn get_or_compute_etag(serve_dir: &Path, rel_path: &Path) -> Result<String> {
     let abs_path = serve_dir.join(rel_path);
@@ -116,9 +144,7 @@ mod tests {
         let etag1 = compute_file_etag(&file).await.expect("etag1");
         let etag2 = compute_file_etag(&file).await.expect("etag2");
         assert_eq!(etag1, etag2);
-        // Must be double-quoted
-        assert!(etag1.starts_with('"'));
-        assert!(etag1.ends_with('"'));
+        assert_eq!(etag1, "\"5eb63bbbe01eeed093cb22bb8f5acdc3\"");
     }
 
     #[tokio::test]
@@ -165,5 +191,15 @@ mod tests {
 
         let etag2 = get_or_compute_etag(dir.path(), rel).await.expect("v2");
         assert_ne!(etag1, etag2);
+    }
+
+    #[test]
+    fn test_multipart_etag_from_part_digests_matches_s3_shape() {
+        let part1 = [0u8; 16];
+        let part2 = [1u8; 16];
+        let etag = multipart_etag_from_part_digests(&[part1, part2]);
+        assert!(etag.starts_with('"'));
+        assert!(etag.ends_with('"'));
+        assert!(etag.contains("-2"));
     }
 }

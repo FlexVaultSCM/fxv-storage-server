@@ -144,17 +144,10 @@ async fn complete_multipart_upload(
         let _ = tokio::fs::create_dir_all(parent).await;
     }
 
-    // Assemble into a temp file, computing BLAKE3 over the full content
+    // Assemble into a temp file while preserving the S3 multipart ETag formula.
     let tmp_path = abs_path.with_extension(format!("{}.fxv_tmp", uuid::Uuid::new_v4().simple()));
 
-    let assemble_result = assemble_parts(
-        &ordered_parts
-            .iter()
-            .map(|(_, p)| p.abs_path.clone())
-            .collect::<Vec<_>>(),
-        &tmp_path,
-    )
-    .await;
+    let assemble_result = assemble_parts(&ordered_parts, &tmp_path).await;
     let (total_size, final_etag, modified) = match assemble_result {
         Ok(r) => r,
         Err(e) => {
@@ -233,21 +226,22 @@ async fn collect_body(body: Body) -> std::io::Result<Bytes> {
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
-/// Concatenate part files into `dst`, computing BLAKE3 of the combined content.
+/// Concatenate part files into `dst`, computing the final S3 multipart ETag.
 /// Returns `(total_bytes, etag, mtime)`.
 async fn assemble_parts(
-    part_paths: &[std::path::PathBuf],
+    parts: &[(u32, crate::multipart_state::PartEntry)],
     dst: &std::path::Path,
 ) -> std::io::Result<(u64, String, SystemTime)> {
     let mut file = tokio::fs::File::create(dst).await?;
-    let mut hasher = blake3::Hasher::new();
     let mut total: u64 = 0;
+    let mut part_digests = Vec::with_capacity(parts.len());
 
-    for part_path in part_paths {
-        let data = tokio::fs::read(part_path).await?;
-        hasher.update(&data);
-        total += data.len() as u64;
+    for (_, part) in parts {
+        let data = tokio::fs::read(&part.abs_path).await?;
+        debug_assert_eq!(part.size, data.len() as u64);
+        total += part.size;
         file.write_all(&data).await?;
+        part_digests.push(part.md5_bytes);
     }
 
     file.flush().await?;
@@ -255,32 +249,17 @@ async fn assemble_parts(
 
     let meta = tokio::fs::metadata(dst).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let etag = etag::etag_from_hash(hasher.finalize());
+    let etag = etag::multipart_etag_from_part_digests(&part_digests);
 
     Ok((total, etag, modified))
 }
 
-/// DELETE /{*key} - AbortMultipartUpload.
-pub async fn delete_dispatch(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-    Query(params): Query<DeleteParams>,
-    _headers: HeaderMap,
-) -> Response {
-    match params.upload_id {
-        Some(upload_id) => abort_multipart_upload(state, key, upload_id).await,
-        None => err_invalid_argument("A valid uploadId query parameter must be provided."),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DeleteParams {
-    #[serde(rename = "uploadId")]
-    pub upload_id: Option<String>,
-}
-
 /// AbortMultipartUpload: clean up all temp files and remove upload state.
-async fn abort_multipart_upload(state: AppState, key: String, upload_id: String) -> Response {
+pub(crate) async fn abort_multipart_upload(
+    state: AppState,
+    key: String,
+    upload_id: String,
+) -> Response {
     let mut uploads = state.uploads.write().await;
     match uploads.remove(&upload_id) {
         Some(entry) if entry.key == key => {

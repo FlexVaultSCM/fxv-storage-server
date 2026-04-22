@@ -172,10 +172,7 @@ async fn test_put_if_match_wrong_etag_412() {
     let client = reqwest::Client::new();
     let resp = client
         .put(format!("{}/file.txt", base))
-        .header(
-            "If-Match",
-            "\"0000000000000000000000000000000000000000000000000000000000000000\"",
-        )
+        .header("If-Match", "\"00000000000000000000000000000000\"")
         .body("new content")
         .send()
         .await

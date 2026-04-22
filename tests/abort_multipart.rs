@@ -85,19 +85,56 @@ async fn test_abort_nonexistent_upload_404() {
     assert_eq!(resp.status(), 404);
 }
 
-/// Aborting without uploadId returns 400.
+/// Plain DeleteObject routing must not accidentally abort an in-progress upload.
 #[tokio::test]
-async fn test_abort_without_upload_id_400() {
+async fn test_delete_without_upload_id_does_not_abort_upload() {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = spawn_server(dir.path().to_owned()).await;
     let client = reqwest::Client::new();
 
-    let resp = client
+    let create_resp = client
+        .post(format!("{}/file.bin?uploads", base))
+        .send()
+        .await
+        .expect("create");
+    let upload_id = parse_upload_id(&create_resp.text().await.unwrap());
+
+    let part_resp = client
+        .put(format!(
+            "{}/file.bin?partNumber=1&uploadId={}",
+            base, upload_id
+        ))
+        .body("data")
+        .send()
+        .await
+        .expect("upload part");
+    let part_etag = part_resp
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let delete_resp = client
         .delete(format!("{}/file.bin", base))
         .send()
         .await
-        .expect("delete");
-    assert_eq!(resp.status(), 400);
+        .expect("delete object");
+    assert_eq!(delete_resp.status(), 204);
+
+    let complete_xml = format!(
+        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{}</ETag></Part></CompleteMultipartUpload>"#,
+        part_etag
+    );
+    let complete_resp = client
+        .post(format!("{}/file.bin?uploadId={}", base, upload_id))
+        .header("Content-Type", "application/xml")
+        .body(complete_xml)
+        .send()
+        .await
+        .expect("complete");
+    assert_eq!(complete_resp.status(), 200);
 }
 
 /// After abort, the object is NOT created (no partial file on disk).

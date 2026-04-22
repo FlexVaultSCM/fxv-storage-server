@@ -2,6 +2,8 @@
 ///
 /// Spins up a full fxv-storage-server instance and tests the full
 /// CreateMultipartUpload -> UploadPart x N -> CompleteMultipartUpload flow.
+use fxv_storage_server::etag;
+use md5::Digest;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -110,6 +112,7 @@ async fn test_multipart_full_flow() {
     let complete_body = complete_resp.text().await.expect("complete body");
     let final_etag = parse_etag_from_xml(&complete_body);
     assert!(final_etag.starts_with('"') && final_etag.ends_with('"'));
+    assert!(final_etag.contains("-2"));
 
     // 5. GET the assembled file and verify content
     let get_resp = reqwest::get(format!("{}/multipart.bin", base))
@@ -119,6 +122,15 @@ async fn test_multipart_full_flow() {
     assert_eq!(
         get_resp.bytes().await.expect("body").as_ref(),
         b"hello world"
+    );
+
+    let rebuilt_store = fxv_storage_server::store::build_shared_store(dir.path())
+        .await
+        .expect("rebuild store");
+    let store = rebuilt_store.read().await;
+    assert_eq!(
+        store.get("multipart.bin").expect("multipart entry").etag,
+        final_etag
     );
 }
 
@@ -147,7 +159,7 @@ async fn test_multipart_complete_wrong_etag_400() {
         .expect("upload part");
 
     let complete_xml = format!(
-        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"0000000000000000000000000000000000000000000000000000000000000000"</ETag></Part></CompleteMultipartUpload>"#
+        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"00000000000000000000000000000000"</ETag></Part></CompleteMultipartUpload>"#
     );
     let complete_resp = client
         .post(format!("{}/file.bin?uploadId={}", base, upload_id))
@@ -204,9 +216,10 @@ async fn test_multipart_upload_part_invalid_number() {
     assert_eq!(resp.status(), 400);
 }
 
-/// Multipart assembled ETag should equal PutObject ETag for the same content.
+/// Multipart completion should use the S3 multipart ETag formula rather than
+/// the single-part PutObject ETag.
 #[tokio::test]
-async fn test_multipart_etag_matches_putobject_etag() {
+async fn test_multipart_etag_uses_s3_formula() {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = spawn_server(dir.path().to_owned()).await;
     let client = reqwest::Client::new();
@@ -269,8 +282,18 @@ async fn test_multipart_etag_matches_putobject_etag() {
     let complete_body = complete_resp.text().await.unwrap();
     let multipart_etag = parse_etag_from_xml(&complete_body);
 
+    let expected_put_etag = etag::compute_file_etag(&dir.path().join("direct.bin"))
+        .await
+        .expect("compute put etag");
+    let expected_multipart_etag =
+        etag::multipart_etag_from_part_digests(&[etag::Md5DigestBytes::from(md5::Md5::digest(
+            content,
+        ))]);
+
+    assert_eq!(put_etag, expected_put_etag);
     assert_eq!(
-        put_etag, multipart_etag,
-        "BLAKE3 ETag should be identical for same content"
+        multipart_etag, expected_multipart_etag,
+        "Multipart ETag should use the S3 multipart formula"
     );
+    assert_ne!(put_etag, multipart_etag);
 }

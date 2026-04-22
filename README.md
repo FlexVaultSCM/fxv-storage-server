@@ -12,11 +12,12 @@
 - `POST /{key}?uploads` - CreateMultipartUpload *(Stage 4)*
 - `PUT /{key}?partNumber=N&uploadId=X` - UploadPart *(Stage 4)*
 - `POST /{key}?uploadId=X` - CompleteMultipartUpload *(Stage 4)*
+- `DELETE /{key}` - DeleteObject
 - `DELETE /{key}?uploadId=X` - AbortMultipartUpload *(Stage 5)*
 
 ## Design Notes
 
-- **ETags** are BLAKE3 hashes (not MD5 as in standard S3). Clients must not treat ETags as MD5.
+- **ETags** use MD5. Single-part uploads and externally-present files use the content MD5; completed multipart uploads use the S3 multipart ETag formula.
 - **Atomicity**: All writes use a temp-file-then-rename pattern, so partial files are never served.
 - **Conditional headers**: Full RFC 7232 support (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since).
 - **Range requests**: Single-range requests supported (S3 constraint: no multi-range).

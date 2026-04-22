@@ -93,6 +93,40 @@ async fn s3_put_object_and_get_object() {
     assert_eq!(body.as_ref(), b"hello from s3 client");
 }
 
+// == DeleteObject
+
+#[tokio::test]
+async fn s3_delete_object_round_trip() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = spawn_server(dir.path().to_owned()).await;
+    let client = s3_client(&base);
+
+    client
+        .put_object()
+        .bucket(BUCKET)
+        .key("delete-me.txt")
+        .body(ByteStream::from_static(b"bye"))
+        .send()
+        .await
+        .expect("PutObject");
+
+    client
+        .delete_object()
+        .bucket(BUCKET)
+        .key("delete-me.txt")
+        .send()
+        .await
+        .expect("DeleteObject");
+
+    let result = client
+        .get_object()
+        .bucket(BUCKET)
+        .key("delete-me.txt")
+        .send()
+        .await;
+    assert!(result.is_err(), "Object should not exist after delete");
+}
+
 // == GetObject: 404 for missing key
 
 /// The server now returns S3-format XML error bodies, so the SDK maps 404 -> NoSuchKey.
@@ -313,6 +347,7 @@ async fn s3_multipart_upload_full_flow() {
         final_etag.starts_with('"') && final_etag.ends_with('"'),
         "ETag should be double-quoted"
     );
+    assert!(final_etag.contains("-2"));
 
     // 5. Verify assembled content
     let body = client

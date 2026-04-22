@@ -35,9 +35,9 @@ Notes on rclone S3 compatibility:
   Flags investigated and found NOT to be required:
   - --s3-disable-checksum: rclone sends Content-MD5 on PUT; our server ignores
     it, so operations succeed either way.
-  - --ignore-checksum: rclone only compares ETags as MD5 when they are exactly
-    32 hex chars. Our BLAKE3 ETags are 64 hex chars, so rclone skips checksum
-    comparison entirely regardless of this flag.
+  - --ignore-checksum: our single-part ETags now use MD5, so normal checksum
+    verification can stay enabled; multipart ETags follow S3's usual
+    md5-of-part-md5s format.
   - --s3-no-head: rclone does HEAD before and after each upload; our server
     handles HEAD correctly (Axum auto-strips the body for HEAD on GET routes).
 
@@ -104,14 +104,14 @@ def check_rclone() -> None:
 
 
 def find_binary(profile: str) -> pathlib.Path:
-    workspace = pathlib.Path(__file__).resolve().parent.parent
+    project_root = pathlib.Path(__file__).resolve().parent.parent
     exe = "fxv-storage-server.exe" if sys.platform == "win32" else "fxv-storage-server"
-    binary = workspace / "fxv-storage-server" / "target" / profile / exe
+    binary = project_root / "target" / profile / exe
     if not binary.exists():
         die(
             f"Binary not found: {binary}\n"
             f"  Build it with:  cargo build{'  --release' if profile == 'release' else ''}\n"
-            f"  (inside {workspace / 'fxv-storage-server'})"
+            f"  (inside {project_root})"
         )
     return binary
 
