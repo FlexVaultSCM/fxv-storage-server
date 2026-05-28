@@ -101,6 +101,11 @@ fn bench_01_md5_only() {
 
 // =============================================================================
 // 2. Sync file write
+//
+// No fsync/sync_data: the server never forces data to physical media before
+// responding (it writes to the page cache, then renames), so client-observed
+// throughput is page-cache-bound. We measure the same thing here so these
+// numbers are comparable to the tokio path and to the HTTP benchmarks below.
 // =============================================================================
 
 #[test]
@@ -117,7 +122,6 @@ fn bench_02_std_write() {
         for c in payload.chunks(chunk) {
             f.write_all(c).expect("write");
         }
-        f.sync_data().ok();
         drop(f);
         print_result(
             &format!("std::fs write, chunk={} KiB", chunk / 1024),
@@ -175,7 +179,8 @@ fn bench_04_std_write_plus_md5() {
             h.update(c);
             f.write_all(c).expect("write");
         }
-        f.sync_data().ok();
+        // No fsync (see bench_02): matches the server's page-cache write path,
+        // so this is a fair ceiling for the receive -> hash -> write pipeline.
         let _ = h.finalize();
         drop(f);
         print_result(
