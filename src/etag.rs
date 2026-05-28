@@ -20,7 +20,7 @@ pub async fn compute_file_etag(path: &Path) -> Result<String> {
 /// Returns the hex string without ETag quoting.
 ///
 /// Runs on a `spawn_blocking` thread so that the MD5 computation does not stall
-/// tokio worker threads — hashing a large file inline would block the event loop.
+/// tokio worker threads - hashing a large file inline would block the event loop.
 pub async fn compute_file_md5_hex(path: &Path) -> Result<String> {
     let path = path.to_owned();
     Ok(tokio::task::spawn_blocking(move || {
