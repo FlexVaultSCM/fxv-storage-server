@@ -328,8 +328,13 @@ async fn write_body_to_temp(
         .await
         .map_err(|e| io::Error::other(format!("writer join: {}", e)))?;
 
-    recv_result?;
-    let (total_bytes, digest) = writer_result?;
+    let (total_bytes, digest) = match writer_result {
+        Err(err) => return Err(err),
+        Ok(result) => {
+            recv_result?;
+            result
+        }
+    };
 
     let meta = tokio::fs::metadata(tmp_path).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
