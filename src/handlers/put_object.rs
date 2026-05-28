@@ -286,7 +286,10 @@ async fn write_body_to_temp(
     while let Some(chunk) = body.frame().await {
         let frame = chunk.map_err(|e| io::Error::other(e.to_string()))?;
         if let Ok(data) = frame.into_data() {
-            hasher.update(&data);
+            // block_in_place signals tokio to keep the event loop alive on other
+            // threads while this CPU-bound update runs; without it a large chunk
+            // stalls the worker and delays I/O completions for this request.
+            tokio::task::block_in_place(|| hasher.update(&data));
             total_bytes += data.len() as u64;
             file.write_all(&data).await?;
         }
