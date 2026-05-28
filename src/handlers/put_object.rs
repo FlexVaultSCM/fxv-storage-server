@@ -23,7 +23,6 @@ use axum::{
 };
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 #[derive(Debug, Deserialize)]
@@ -272,35 +271,68 @@ pub(crate) type Uploads = SharedUploadState;
 
 /// Stream `body` into `tmp_path`, computing MD5 and capturing metadata.
 /// Returns `(file_size, etag, digest_bytes, modified_time)`.
+///
+/// A blocking writer task owns the file handle and MD5 hasher. The async side
+/// drains hyper frames from the network and pushes them through a bounded
+/// channel. This pipelines network receive against disk-write + hash so the
+/// TCP receive buffer never has to drain to disk before more bytes can arrive -
+/// without this, single-stream throughput is gated by sequential
+/// receive -> hash -> write cycles.
 async fn write_body_to_temp(
     tmp_path: &FsPath,
     body: Body,
 ) -> io::Result<(u64, String, etag::Md5DigestBytes, SystemTime)> {
     use http_body_util::BodyExt;
 
-    let mut file = tokio::fs::File::create(tmp_path).await?;
-    let mut hasher = Md5::new();
-    let mut total_bytes: u64 = 0;
+    // Channel depth governs how many frames can be in flight between the
+    // network reader and the disk writer. Eight is enough to keep the writer
+    // fed while bounding peak memory to a few hundred KiB on typical loopback
+    // frame sizes.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(8);
+
+    let writer_path = tmp_path.to_owned();
+    let writer = tokio::task::spawn_blocking(move || -> io::Result<(u64, etag::Md5DigestBytes)> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&writer_path)?;
+        let mut hasher = Md5::new();
+        let mut total: u64 = 0;
+        while let Some(chunk) = rx.blocking_recv() {
+            hasher.update(&chunk);
+            file.write_all(&chunk)?;
+            total += chunk.len() as u64;
+        }
+        file.flush()?;
+        let digest: etag::Md5DigestBytes = hasher.finalize().into();
+        Ok((total, digest))
+    });
 
     let mut body = body;
-    while let Some(chunk) = body.frame().await {
-        let frame = chunk.map_err(|e| io::Error::other(e.to_string()))?;
-        if let Ok(data) = frame.into_data() {
-            // block_in_place signals tokio to keep the event loop alive on other
-            // threads while this CPU-bound update runs; without it a large chunk
-            // stalls the worker and delays I/O completions for this request.
-            tokio::task::block_in_place(|| hasher.update(&data));
-            total_bytes += data.len() as u64;
-            file.write_all(&data).await?;
+    let recv_result: io::Result<()> = async {
+        while let Some(chunk) = body.frame().await {
+            let frame = chunk.map_err(|e| io::Error::other(e.to_string()))?;
+            if let Ok(data) = frame.into_data() {
+                tx.send(data)
+                    .await
+                    .map_err(|_| io::Error::other("writer task closed"))?;
+            }
         }
+        Ok(())
     }
+    .await;
 
-    file.flush().await?;
-    drop(file);
+    // Signal EOF to the writer, then always wait for it to flush+finalize
+    // before surfacing any earlier receive error - this guarantees the temp
+    // file is fully closed before the caller unlinks or renames it.
+    drop(tx);
+    let writer_result = writer
+        .await
+        .map_err(|e| io::Error::other(format!("writer join: {}", e)))?;
+
+    recv_result?;
+    let (total_bytes, digest) = writer_result?;
 
     let meta = tokio::fs::metadata(tmp_path).await?;
     let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let digest: etag::Md5DigestBytes = hasher.finalize().into();
     let etag = etag::etag_from_digest_bytes(&digest);
 
     Ok((total_bytes, etag, digest, modified))
