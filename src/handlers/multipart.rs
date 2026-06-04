@@ -24,7 +24,6 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 #[derive(Debug, Deserialize)]
@@ -241,30 +240,53 @@ async fn collect_body(body: Body) -> io::Result<Bytes> {
 
 /// Concatenate part files into `dst`, computing the final S3 multipart ETag.
 /// Returns `(total_bytes, etag, md5_hex, mtime)`.
+///
+/// Runs on a `spawn_blocking` thread: the loop is sequential CPU+I/O with no
+/// async concurrency, and MD5 over large parts would stall tokio workers if run
+/// inline on the async thread.
 async fn assemble_parts(parts: &[(u32, PartEntry)], dst: &FsPath) -> io::Result<(u64, String, String, SystemTime)> {
-    let mut file = tokio::fs::File::create(dst).await?;
-    let mut md5_hasher = Md5::new();
-    let mut total: u64 = 0;
-    let mut part_digests = Vec::with_capacity(parts.len());
+    let parts = parts.to_vec();
+    let dst = dst.to_owned();
 
-    for (_, part) in parts {
-        let data = tokio::fs::read(&part.abs_path).await?;
-        debug_assert_eq!(part.size, data.len() as u64);
-        total += part.size;
-        md5_hasher.update(&data);
-        file.write_all(&data).await?;
-        part_digests.push(part.md5_bytes);
-    }
+    tokio::task::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        const BUF: usize = 1024 * 1024; // 1 MiB streaming buffer
 
-    file.flush().await?;
-    drop(file);
+        let mut file = std::fs::File::create(&dst)?;
+        let mut md5_hasher = Md5::new();
+        let mut total: u64 = 0;
+        let mut part_digests = Vec::with_capacity(parts.len());
 
-    let meta = tokio::fs::metadata(dst).await?;
-    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let etag = etag::multipart_etag_from_part_digests(&part_digests);
-    let md5_hex = etag::md5_hex_from_digest_bytes(&md5_hasher.finalize().into());
+        for (_, part) in &parts {
+            let mut src = std::fs::File::open(&part.abs_path)?;
+            let mut buf = vec![0u8; BUF];
+            let mut part_bytes: u64 = 0;
+            loop {
+                let n = src.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                md5_hasher.update(&buf[..n]);
+                file.write_all(&buf[..n])?;
+                part_bytes += n as u64;
+            }
+            debug_assert_eq!(part.size, part_bytes);
+            total += part_bytes;
+            part_digests.push(part.md5_bytes);
+        }
 
-    Ok((total, etag, md5_hex, modified))
+        file.flush()?;
+        drop(file);
+
+        let meta = std::fs::metadata(&dst)?;
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let etag = etag::multipart_etag_from_part_digests(&part_digests);
+        let md5_hex = etag::md5_hex_from_digest_bytes(&md5_hasher.finalize().into());
+
+        io::Result::Ok((total, etag, md5_hex, modified))
+    })
+    .await
+    .map_err(|e| io::Error::other(e.to_string()))?
 }
 
 /// AbortMultipartUpload: clean up all temp files and remove upload state.

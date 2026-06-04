@@ -6,7 +6,6 @@ use crate::errors::*;
 
 // == External
 use md5::{Digest, Md5};
-use tokio::io::AsyncReadExt;
 
 /// Raw MD5 digest bytes used for ETag and checksum calculations.
 pub type Md5DigestBytes = [u8; 16];
@@ -19,19 +18,28 @@ pub async fn compute_file_etag(path: &Path) -> Result<String> {
 
 /// Compute an MD5 checksum for the given file path by streaming its contents.
 /// Returns the hex string without ETag quoting.
+///
+/// Runs on a `spawn_blocking` thread so that the MD5 computation does not stall
+/// tokio worker threads - hashing a large file inline would block the event loop.
 pub async fn compute_file_md5_hex(path: &Path) -> Result<String> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut hasher = Md5::new();
-    let mut buf = vec![0u8; 65536];
-    loop {
-        let n = file.read(&mut buf).await?;
-        if n == 0 {
-            break;
+    let path = path.to_owned();
+    Ok(tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut file = std::fs::File::open(&path)?;
+        let mut hasher = Md5::new();
+        let mut buf = vec![0u8; 65536];
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
         }
-        hasher.update(&buf[..n]);
-    }
-    let digest: Md5DigestBytes = hasher.finalize().into();
-    Ok(md5_hex_from_digest_bytes(&digest))
+        let digest: Md5DigestBytes = hasher.finalize().into();
+        std::io::Result::Ok(md5_hex_from_digest_bytes(&digest))
+    })
+    .await
+    .map_err(|e| std::io::Error::other(e.to_string()))??)
 }
 
 /// Render an MD5 digest as a quoted ETag string.
