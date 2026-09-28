@@ -38,7 +38,11 @@ const PART_BYTES: usize = 16 * 1024 * 1024; // 16 MiB per multipart part
 
 fn mb_per_sec(bytes: usize, elapsed: Duration) -> f64 {
     let secs = elapsed.as_secs_f64();
-    if secs <= 0.0 { f64::INFINITY } else { (bytes as f64 / (1024.0 * 1024.0)) / secs }
+    if secs <= 0.0 {
+        f64::INFINITY
+    } else {
+        (bytes as f64 / (1024.0 * 1024.0)) / secs
+    }
 }
 
 fn print_result(label: &str, bytes: usize, elapsed: Duration) {
@@ -253,14 +257,21 @@ async fn bench_06_upload_part() {
         let part = run + 1;
         let start = Instant::now();
         let resp = client
-            .put(format!("{}/single-part.bin?partNumber={}&uploadId={}", base, part, upload_id))
+            .put(format!(
+                "{}/single-part.bin?partNumber={}&uploadId={}",
+                base, part, upload_id
+            ))
             .body(payload.as_ref().clone())
             .send()
             .await
             .expect("upload part");
         assert_eq!(resp.status(), 200);
         print_result(
-            &format!("UploadPart run {} (single {} MiB part)", run, PAYLOAD_BYTES / (1024 * 1024)),
+            &format!(
+                "UploadPart run {} (single {} MiB part)",
+                run,
+                PAYLOAD_BYTES / (1024 * 1024)
+            ),
             PAYLOAD_BYTES,
             start.elapsed(),
         );
@@ -331,7 +342,11 @@ async fn bench_07_multipart_full() {
         let total_elapsed = start_total.elapsed();
 
         print_result("multipart sequential: UploadPart phase", PAYLOAD_BYTES, parts_elapsed);
-        print_result("multipart sequential: CompleteMultipartUpload phase", PAYLOAD_BYTES, complete_elapsed);
+        print_result(
+            "multipart sequential: CompleteMultipartUpload phase",
+            PAYLOAD_BYTES,
+            complete_elapsed,
+        );
         print_result("multipart sequential: end-to-end", PAYLOAD_BYTES, total_elapsed);
     }
 
@@ -384,8 +399,16 @@ async fn bench_07_multipart_full() {
         let complete_elapsed = start_complete.elapsed();
         let total_elapsed = start_total.elapsed();
 
-        print_result("multipart concurrent(8): UploadPart phase", PAYLOAD_BYTES, parts_elapsed);
-        print_result("multipart concurrent(8): CompleteMultipartUpload phase", PAYLOAD_BYTES, complete_elapsed);
+        print_result(
+            "multipart concurrent(8): UploadPart phase",
+            PAYLOAD_BYTES,
+            parts_elapsed,
+        );
+        print_result(
+            "multipart concurrent(8): CompleteMultipartUpload phase",
+            PAYLOAD_BYTES,
+            complete_elapsed,
+        );
         print_result("multipart concurrent(8): end-to-end", PAYLOAD_BYTES, total_elapsed);
     }
 }

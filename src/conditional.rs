@@ -1,10 +1,9 @@
-//! RFC 7232 conditional request evaluation for GET/HEAD.
+//! Conditional request evaluation.
 //!
-//! Returns the appropriate HTTP status code if a conditional check fails
-//! (304 Not Modified, 412 Precondition Failed), or `None` if the request
-//! should proceed normally.
+//! - `evaluate`: RFC 7232 conditions for GET/HEAD, giving 304 Not Modified, 412 Precondition Failed, or proceed.
+//! - `evaluate_delete`: S3 conditional deletes (`If-Match` on DeleteObject), giving 404, 412, or proceed.
 //!
-//! S3 evaluation order per RFC 7232 s.6:
+//! S3 evaluation order for GET/HEAD per RFC 7232 s.6:
 //! 1. If-Match               -> 412 on mismatch
 //! 2. If-Unmodified-Since    -> 412 on modified (only if If-Match absent)
 //! 3. If-None-Match          -> 304 on match
@@ -92,16 +91,47 @@ pub fn evaluate(
     ConditionalResult::Proceed
 }
 
-/// Returns `true` if `etag` satisfies the `If-Match` / `If-None-Match` value.
-/// Supports the wildcard `*` and a single quoted ETag value.
-/// Does NOT support the comma-separated list form (rare in practice, not needed for S3 subset).
-fn etag_matches(etag: &str, header_value: &str) -> bool {
+/// Returns `true` if `etag` (the object's, double-quoted) satisfies an `If-Match` / `If-None-Match`
+/// value: the wildcard `*`, or a single ETag compared strongly, quoted or not, as S3 accepts both.
+/// A weak ETag (`W/"..."`) or the comma-separated list form (rare in practice, not needed for the
+/// S3 subset) never matches. Every conditional check (GET, PUT, DELETE) compares through this.
+pub(crate) fn etag_matches(etag: &str, header_value: &str) -> bool {
     let v = header_value.trim();
-    if v == "*" {
-        return true;
+    v == "*" || etag.trim_matches('"') == v.trim_matches('"')
+}
+
+/// Result of evaluating a DeleteObject request's `If-Match` header.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeleteCondition {
+    /// Delete the object, or return 204 for a missing one when no condition was given.
+    Proceed,
+    /// Return 404 NoSuchKey: a condition was given and there is no object to evaluate it against.
+    NotFound,
+    /// Return 412 Precondition Failed: the object's ETag does not match.
+    PreconditionFailed,
+}
+
+/// Evaluate a DeleteObject request's `If-Match` header, as S3 conditional deletes do.
+///
+/// - `etag`: the current ETag of the object (double-quoted), or `None` if it doesn't exist.
+/// - `if_match`: value of the `If-Match` header, if present: `*` to require that the object exists, or an ETag to
+///   require that it is unchanged. The ETag may be quoted or not, as S3 accepts both.
+///
+/// Without `If-Match` a delete always proceeds, and a missing object still gets 204. The comparison is strong: a
+/// weak ETag (`W/"..."`) or a comma-separated list never matches, so the delete is refused rather than guessed at.
+/// `If-None-Match` is not evaluated, as S3 general purpose buckets support only `If-Match` on DeleteObject.
+pub fn evaluate_delete(etag: Option<&str>, if_match: Option<&str>) -> DeleteCondition {
+    let Some(if_match) = if_match else {
+        return DeleteCondition::Proceed;
+    };
+    let Some(etag) = etag else {
+        return DeleteCondition::NotFound;
+    };
+    if etag_matches(etag, if_match) {
+        DeleteCondition::Proceed
+    } else {
+        DeleteCondition::PreconditionFailed
     }
-    // Strong comparison: exact match of the double-quoted ETag string
-    etag == v
 }
 
 /// Returns `true` if `modified` is strictly after `since` (i.e. the resource was modified).
@@ -246,5 +276,61 @@ mod tests {
             evaluate(ETAG, ts(2000), None, Some(ETAG), Some(ts(1000)), None),
             ConditionalResult::NotModified
         );
+    }
+
+    #[test]
+    fn test_delete_without_if_match_proceeds_whether_or_not_the_object_exists() {
+        // Verify an unconditional delete proceeds, including for a missing object.
+        assert_eq!(evaluate_delete(Some(ETAG), None), DeleteCondition::Proceed);
+        assert_eq!(evaluate_delete(None, None), DeleteCondition::Proceed);
+    }
+
+    #[test]
+    fn test_delete_if_match_etag() {
+        // Verify a matching ETag proceeds, quoted or not, and a different one fails.
+        assert_eq!(evaluate_delete(Some(ETAG), Some(ETAG)), DeleteCondition::Proceed);
+        assert_eq!(evaluate_delete(Some(ETAG), Some("abc123")), DeleteCondition::Proceed);
+        assert_eq!(
+            evaluate_delete(Some(ETAG), Some(OTHER_ETAG)),
+            DeleteCondition::PreconditionFailed
+        );
+    }
+
+    #[test]
+    fn test_delete_if_match_wildcard_requires_the_object() {
+        // Verify If-Match: * proceeds for an existing object.
+        assert_eq!(evaluate_delete(Some(ETAG), Some("*")), DeleteCondition::Proceed);
+        assert_eq!(evaluate_delete(None, Some("*")), DeleteCondition::NotFound);
+    }
+
+    #[test]
+    fn test_delete_if_match_on_a_missing_object_is_not_found() {
+        // Verify a conditional delete of a missing object is 404, as S3 returns.
+        assert_eq!(evaluate_delete(None, Some(ETAG)), DeleteCondition::NotFound);
+    }
+
+    #[test]
+    fn test_delete_weak_etag_or_list_never_matches() {
+        // Verify forms a strong comparison can't satisfy refuse the delete.
+        assert_eq!(
+            evaluate_delete(Some(ETAG), Some("W/\"abc123\"")),
+            DeleteCondition::PreconditionFailed
+        );
+        assert_eq!(
+            evaluate_delete(Some(ETAG), Some("\"xyz789\", \"abc123\"")),
+            DeleteCondition::PreconditionFailed
+        );
+    }
+
+    #[test]
+    fn test_etag_matches() {
+        // Verify the one comparison every conditional check uses.
+        assert!(etag_matches(ETAG, ETAG));
+        assert!(etag_matches(ETAG, "abc123"));
+        assert!(etag_matches(ETAG, " \"abc123\" "));
+        assert!(etag_matches(ETAG, "*"));
+        assert!(!etag_matches(ETAG, OTHER_ETAG));
+        assert!(!etag_matches(ETAG, "W/\"abc123\""));
+        assert!(!etag_matches(ETAG, "\"xyz789\", \"abc123\""));
     }
 }

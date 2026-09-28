@@ -108,6 +108,55 @@ async fn s3_delete_object_round_trip() {
     assert!(result.is_err(), "Object should not exist after delete");
 }
 
+#[tokio::test]
+async fn s3_conditional_delete_object() {
+    // Verify DeleteObject with If-Match from the SDK: a stale ETag is refused, the current one deletes.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = s3_client(&base);
+
+    let put = |body: &'static [u8]| {
+        client
+            .put_object()
+            .bucket(BUCKET)
+            .key("conditional.txt")
+            .body(ByteStream::from_static(body))
+            .send()
+    };
+    let stale_etag = put(b"first").await.expect("PutObject").e_tag.expect("ETag");
+    let current_etag = put(b"second").await.expect("PutObject").e_tag.expect("ETag");
+
+    let stale = client
+        .delete_object()
+        .bucket(BUCKET)
+        .key("conditional.txt")
+        .if_match(stale_etag)
+        .send()
+        .await;
+    assert!(stale.is_err(), "a stale ETag should not delete");
+    let kept = client
+        .get_object()
+        .bucket(BUCKET)
+        .key("conditional.txt")
+        .send()
+        .await
+        .expect("GetObject after the refused delete");
+    let kept = kept.body.collect().await.expect("read body").into_bytes();
+    assert_eq!(&kept[..], b"second");
+
+    client
+        .delete_object()
+        .bucket(BUCKET)
+        .key("conditional.txt")
+        .if_match(current_etag)
+        .send()
+        .await
+        .expect("DeleteObject with the current ETag");
+    let result = client.get_object().bucket(BUCKET).key("conditional.txt").send().await;
+    assert!(result.is_err(), "Object should not exist after delete");
+}
+
 // == GetObject: 404 for missing key
 
 /// The server now returns S3-format XML error bodies, so the SDK maps 404 -> NoSuchKey.

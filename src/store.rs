@@ -78,6 +78,17 @@ impl FileStore {
     }
 }
 
+/// The store key of an object at `rel_path` (relative to the serve root, as `sanitize_key` returns it): its
+/// components joined with `/`, e.g. `"a/b/c.txt"`. Every lookup and update of the store uses this form, so request
+/// paths that name the same file (`a.txt`, `/a.txt`) are one object.
+pub fn object_key(rel_path: &Path) -> String {
+    rel_path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Recursively walk `dir`, compute ETags, and collect entries into `map`.
 /// `rel_base` is the serve root; used to produce relative keys.
 async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEntry>) -> Result<()> {
@@ -98,11 +109,7 @@ async fn walk_dir(rel_base: &Path, dir: &Path, map: &mut HashMap<String, FileEnt
             walk_dir_boxed(rel_base, &path, map).await?;
         } else if file_type.is_file() {
             let rel_path = path.strip_prefix(rel_base)?;
-            let rel_key = rel_path
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
+            let rel_key = object_key(rel_path);
 
             match compute_entry(rel_base, rel_path, &path).await {
                 Ok(entry) => {
@@ -225,5 +232,12 @@ mod tests {
 
         // Verify the entry is no longer present.
         assert!(store.get("a.txt").is_none());
+    }
+
+    #[test]
+    fn test_object_key_joins_components_with_slashes() {
+        // Verify keys have one form whatever the platform's separator.
+        assert_eq!(object_key(Path::new("a.txt")), "a.txt");
+        assert_eq!(object_key(&Path::new("a").join("b").join("c.txt")), "a/b/c.txt");
     }
 }

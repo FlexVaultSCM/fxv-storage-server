@@ -21,6 +21,12 @@ use tracing::debug;
 
 /// GET /{*key} - S3 GetObject
 pub async fn get_object(State(state): State<AppState>, Path(key): Path<String>, headers: HeaderMap) -> Response {
+    // The store is keyed by the normalized path; a key that isn't a valid path names no object.
+    let Some(rel_path) = crate::handlers::put_object::sanitize_key(&key) else {
+        return s3_error(S3ErrorKind::NoSuchKey);
+    };
+    let key = crate::store::object_key(&rel_path);
+
     let store = state.store.read().await;
     let entry = match store.get(&key) {
         Some(e) => e.clone(),

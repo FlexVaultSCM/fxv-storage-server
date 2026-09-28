@@ -140,6 +140,8 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
         Some(p) => p,
         None => return s3_error(S3ErrorKind::InvalidArgument("The specified object key is invalid.")),
     };
+    // The store is keyed by the normalized path, so every spelling of it names one object.
+    let key = crate::store::object_key(&rel_path);
     let abs_path = serve_dir.join(&rel_path);
 
     if let Some(parent) = abs_path.parent() {

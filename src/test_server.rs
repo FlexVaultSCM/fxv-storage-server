@@ -93,7 +93,7 @@ impl TestServer {
         let rel_path = crate::handlers::put_object::sanitize_key(path)
             .ok_or_else(|| invalid_input_error("The specified object key is invalid."))
             .map_err(TestServerError::Operation)?;
-        let object_key = rel_path_to_key(&rel_path);
+        let object_key = crate::store::object_key(&rel_path);
         let serve_dir = self.serve_dir.clone();
         let store = self.store.clone();
         let key = key.to_owned();
@@ -241,14 +241,6 @@ async fn bind_first_available_port(port_range: Range<u16>) -> errors::Result<tok
 struct StartupSuccess {
     local_addr: SocketAddr,
     store: SharedStore,
-}
-
-fn rel_path_to_key(rel_path: &Path) -> String {
-    rel_path
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn invalid_input_error(message: &str) -> errors::Error {

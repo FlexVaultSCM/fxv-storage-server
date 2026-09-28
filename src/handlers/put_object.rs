@@ -7,7 +7,7 @@ use std::{
 
 // == Internal
 use crate::{
-    AppState, etag,
+    AppState, conditional, etag,
     metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
     multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState},
     s3_xml_compat::{S3ErrorKind, s3_error},
@@ -61,6 +61,8 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         Some(p) => p,
         None => return s3_error(S3ErrorKind::InvalidArgument("The specified object key is invalid.")),
     };
+    // The store is keyed by the normalized path, so every spelling of it names one object.
+    let key = crate::store::object_key(&rel_path);
 
     let abs_path = serve_dir.join(&rel_path);
     let user_metadata_headers = metadata_cache::extract_user_metadata_headers(&headers);
@@ -84,7 +86,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
         let existing = s.get(&key);
         match (existing, if_match.as_deref(), if_none_match.as_deref()) {
             (Some(_), _, Some("*")) => return s3_error(S3ErrorKind::PreconditionFailed),
-            (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
+            (Some(entry), Some(im), _) if !conditional::etag_matches(&entry.etag, im) => {
                 return s3_error(S3ErrorKind::PreconditionFailed);
             }
             (Some(_), Some(_), _) => {}
@@ -151,7 +153,7 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 return s3_error(S3ErrorKind::PreconditionFailed);
             }
-            (Some(entry), Some(im), _) if entry.etag != im && im != "*" => {
+            (Some(entry), Some(im), _) if !conditional::etag_matches(&entry.etag, im) => {
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 return s3_error(S3ErrorKind::PreconditionFailed);
             }
