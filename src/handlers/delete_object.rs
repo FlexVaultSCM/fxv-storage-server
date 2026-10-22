@@ -4,9 +4,9 @@ use std::io;
 // == Internal
 use crate::{
     AppState,
-    conditional::{DeleteCondition, evaluate_delete},
+    conditional::{DeleteCondition, evaluate_delete, single_header},
     metadata_cache,
-    s3_xml_compat::{S3ErrorKind, s3_error},
+    s3_xml_compat::{S3ErrorKind, condition_header_error, s3_error},
     store::SharedStore,
 };
 
@@ -35,25 +35,10 @@ pub async fn delete_dispatch(
 ) -> Response {
     match params.upload_id {
         Some(upload_id) => crate::handlers::multipart::abort_multipart_upload(state, key, upload_id).await,
-        None => match if_match_header(&headers) {
+        None => match single_header(&headers, &header::IF_MATCH, "If-Match") {
             Ok(if_match) => delete_object(state.store, key, if_match).await,
-            Err(message) => s3_error(S3ErrorKind::InvalidArgument(message)),
+            Err(e) => condition_header_error(&e),
         },
-    }
-}
-
-/// The request's `If-Match` value, if it has one. A condition that is present but can't be read (not visible
-/// ASCII) or is given more than once is an error rather than no condition: treating it as absent would turn a
-/// conditional delete into an unconditional one.
-fn if_match_header(headers: &HeaderMap) -> Result<Option<String>, &'static str> {
-    let mut values = headers.get_all(header::IF_MATCH).iter();
-    match (values.next(), values.next()) {
-        (None, _) => Ok(None),
-        (Some(value), None) => value
-            .to_str()
-            .map(|value| Some(value.to_owned()))
-            .map_err(|_| "The If-Match header is invalid."),
-        (Some(_), Some(_)) => Err("Only one If-Match header is supported."),
     }
 }
 

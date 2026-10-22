@@ -21,6 +21,7 @@ use common::spawn_server;
 use aws_sdk_s3::{
     Client,
     config::{Builder as S3ConfigBuilder, Credentials, Region},
+    error::ProvideErrorMetadata,
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart},
 };
@@ -379,6 +380,85 @@ async fn s3_multipart_upload_full_flow() {
         .expect("body")
         .into_bytes();
     assert_eq!(body.as_ref(), b"hello world");
+}
+
+// == Multipart Upload: CompleteMultipartUpload with If-None-Match: *
+
+#[tokio::test]
+async fn s3_complete_multipart_upload_if_none_match_star_prevents_overwrite() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = s3_client(&base);
+
+    // Uploads `body` as a one-part upload and completes it create-only.
+    let complete_create_only = |body: &'static [u8]| {
+        let client = client.clone();
+        async move {
+            let upload_id = client
+                .create_multipart_upload()
+                .bucket(BUCKET)
+                .key("exclusive.bin")
+                .send()
+                .await
+                .expect("CreateMultipartUpload")
+                .upload_id()
+                .expect("upload_id")
+                .to_owned();
+            let etag = client
+                .upload_part()
+                .bucket(BUCKET)
+                .key("exclusive.bin")
+                .upload_id(&upload_id)
+                .part_number(1)
+                .body(ByteStream::from_static(body))
+                .send()
+                .await
+                .expect("UploadPart")
+                .e_tag()
+                .expect("etag")
+                .to_owned();
+            client
+                .complete_multipart_upload()
+                .bucket(BUCKET)
+                .key("exclusive.bin")
+                .upload_id(&upload_id)
+                .if_none_match("*")
+                .multipart_upload(
+                    CompletedMultipartUpload::builder()
+                        .parts(CompletedPart::builder().part_number(1).e_tag(&etag).build())
+                        .build(),
+                )
+                .send()
+                .await
+        }
+    };
+
+    complete_create_only(b"first")
+        .await
+        .expect("first CompleteMultipartUpload");
+    let error = complete_create_only(b"second").await.expect_err("Expected 412 error");
+    let status = error.raw_response().expect("raw response").status().as_u16();
+    assert_eq!(status, 412, "Expected 412 Precondition Failed");
+    assert_eq!(error.code(), Some("PreconditionFailed"));
+
+    let body = client
+        .get_object()
+        .bucket(BUCKET)
+        .key("exclusive.bin")
+        .send()
+        .await
+        .expect("GetObject")
+        .body
+        .collect()
+        .await
+        .expect("body")
+        .into_bytes();
+    assert_eq!(
+        body.as_ref(),
+        b"first",
+        "the refused complete didn't replace the object"
+    );
 }
 
 // == AbortMultipartUpload

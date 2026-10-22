@@ -8,6 +8,9 @@
 // == Std
 use std::borrow::Cow;
 
+// == Internal
+use crate::conditional::ConditionHeaderError;
+
 // == External
 use axum::{body::Body, http::StatusCode, response::Response};
 use serde::{Deserialize, Serialize};
@@ -30,6 +33,8 @@ pub enum S3ErrorKind<'a> {
     InvalidPart,
     /// The supplied XML body was malformed.
     MalformedXml,
+    /// A header the request gave implies functionality the server doesn't implement.
+    NotImplemented,
     /// An unexpected internal error occurred.
     Internal,
 }
@@ -41,6 +46,7 @@ impl S3ErrorKind<'_> {
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
             Self::InvalidRange => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::InvalidArgument(_) | Self::InvalidPart | Self::MalformedXml => StatusCode::BAD_REQUEST,
+            Self::NotImplemented => StatusCode::NOT_IMPLEMENTED,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -54,6 +60,7 @@ impl S3ErrorKind<'_> {
             Self::InvalidArgument(_) => "InvalidArgument",
             Self::InvalidPart => "InvalidPart",
             Self::MalformedXml => "MalformedXML",
+            Self::NotImplemented => "NotImplemented",
             Self::Internal => "InternalError",
         }
     }
@@ -72,6 +79,9 @@ impl S3ErrorKind<'_> {
             ),
             Self::MalformedXml => {
                 Cow::Borrowed("The XML you provided was not well-formed or did not validate against our schema.")
+            }
+            Self::NotImplemented => {
+                Cow::Borrowed("A header you provided implies functionality that is not implemented.")
             }
             Self::Internal => Cow::Borrowed("We encountered an internal error. Please try again."),
         }
@@ -162,4 +172,13 @@ pub fn to_xml_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, quick_xml::se::S
 /// Deserialise a value from an XML byte slice.
 pub fn from_xml_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, quick_xml::DeError> {
     quick_xml::de::from_reader(bytes)
+}
+
+/// The error response for conditional headers that can't be evaluated: 501 NotImplemented for an `If-None-Match`
+/// value S3 doesn't implement, and 400 InvalidArgument otherwise.
+pub fn condition_header_error(error: &ConditionHeaderError) -> Response {
+    match error {
+        ConditionHeaderError::UnsupportedIfNoneMatch => s3_error(S3ErrorKind::NotImplemented),
+        _ => s3_error(S3ErrorKind::InvalidArgument(&error.message())),
+    }
 }

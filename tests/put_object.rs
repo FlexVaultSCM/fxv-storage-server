@@ -263,3 +263,46 @@ async fn test_put_persists_user_metadata_headers() {
         "blue"
     );
 }
+
+/// A PUT whose condition can't be evaluated is refused rather than written unconditionally: an `If-None-Match` other
+/// than a bare `*` with 501 NotImplemented, as S3 refuses it, and a repeated or unreadable condition with 400.
+#[tokio::test]
+async fn test_put_refuses_conditions_it_cannot_evaluate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = reqwest::Client::new();
+    let url = format!("{}/kept.txt", base);
+
+    client.put(&url).body("first").send().await.expect("PUT");
+
+    for value in ["\"*\"", "\"abc\"", "*, \"abc\""] {
+        let resp = client
+            .put(&url)
+            .header("If-None-Match", value)
+            .body("second")
+            .send()
+            .await
+            .expect("PUT");
+        assert_eq!(resp.status(), 501, "{value}");
+    }
+    let repeated = client
+        .put(&url)
+        .header("If-None-Match", "\"abc\"")
+        .header("If-None-Match", "*")
+        .body("second")
+        .send()
+        .await
+        .expect("PUT");
+    assert_eq!(repeated.status(), 400);
+    let unreadable = client
+        .put(&url)
+        .header("If-Match", reqwest::header::HeaderValue::from_bytes(b"\xff").unwrap())
+        .body("second")
+        .send()
+        .await
+        .expect("PUT");
+    assert_eq!(unreadable.status(), 400);
+
+    assert_eq!(fs::read(dir.path().join("kept.txt")).unwrap(), b"first");
+}

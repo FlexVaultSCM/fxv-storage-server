@@ -320,3 +320,252 @@ async fn test_multipart_persists_user_metadata_headers() {
         "alice"
     );
 }
+
+/// Starts a multipart upload of `key` with one part holding `body`, returning the upload ID and the part's ETag.
+async fn upload_one_part(client: &reqwest::Client, base: &str, key: &str, body: &'static str) -> (String, String) {
+    let create_resp = client
+        .post(format!("{}/{}?uploads", base, key))
+        .send()
+        .await
+        .expect("CreateMultipartUpload");
+    let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
+    let part_resp = client
+        .put(format!("{}/{}?partNumber=1&uploadId={}", base, key, upload_id))
+        .body(body)
+        .send()
+        .await
+        .expect("UploadPart");
+    let etag = part_resp
+        .headers()
+        .get("etag")
+        .expect("etag")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    (upload_id, etag)
+}
+
+/// Completes the upload of `key` with its one part, sending `condition` as a header where given.
+async fn complete_one_part(
+    client: &reqwest::Client,
+    base: &str,
+    key: &str,
+    (upload_id, etag): &(String, String),
+    condition: Option<(&str, &str)>,
+) -> reqwest::Response {
+    let complete_xml = format!(
+        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{}</ETag></Part></CompleteMultipartUpload>"#,
+        etag
+    );
+    let mut request = client
+        .post(format!("{}/{}?uploadId={}", base, key, upload_id))
+        .header("Content-Type", "application/xml")
+        .body(complete_xml);
+    if let Some((name, value)) = condition {
+        request = request.header(name, value);
+    }
+    request.send().await.expect("CompleteMultipartUpload")
+}
+
+/// A complete with `If-None-Match: *` creates a missing object, and is refused with 412 onto an existing one, which
+/// it leaves as it was. The refused upload is kept, so it can still be aborted.
+#[tokio::test]
+async fn test_multipart_complete_if_none_match_creates_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = reqwest::Client::new();
+
+    let first = upload_one_part(&client, &base, "created.bin", "first").await;
+    let resp = complete_one_part(&client, &base, "created.bin", &first, Some(("If-None-Match", "*"))).await;
+    assert_eq!(resp.status(), 200);
+
+    let second = upload_one_part(&client, &base, "created.bin", "second").await;
+    let resp = complete_one_part(&client, &base, "created.bin", &second, Some(("If-None-Match", "*"))).await;
+    assert_eq!(resp.status(), 412);
+    let body = resp.text().await.unwrap();
+    assert_eq!(parse_xml_tag(&body, "Code"), "PreconditionFailed");
+
+    let get_resp = reqwest::get(format!("{}/created.bin", base)).await.expect("GET");
+    assert_eq!(get_resp.bytes().await.unwrap().as_ref(), b"first");
+
+    let abort_resp = client
+        .delete(format!("{}/created.bin?uploadId={}", base, second.0))
+        .send()
+        .await
+        .expect("AbortMultipartUpload");
+    assert_eq!(abort_resp.status(), 204);
+    let multipart_dir = dir.path().join(MULTIPART_UPLOAD_DIR);
+    assert_eq!(
+        fs::read_dir(&multipart_dir).expect("read multipart dir").count(),
+        0,
+        "the aborted upload's parts are removed"
+    );
+}
+
+/// A complete with `If-Match` replaces an object whose ETag matches, and is refused with 412 onto one whose ETag
+/// differs or that doesn't exist.
+#[tokio::test]
+async fn test_multipart_complete_if_match_requires_the_etag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = reqwest::Client::new();
+
+    let missing = upload_one_part(&client, &base, "replaced.bin", "never").await;
+    let resp = complete_one_part(&client, &base, "replaced.bin", &missing, Some(("If-Match", "\"abc\""))).await;
+    assert_eq!(resp.status(), 412);
+
+    let first = upload_one_part(&client, &base, "replaced.bin", "first").await;
+    let resp = complete_one_part(&client, &base, "replaced.bin", &first, None).await;
+    assert_eq!(resp.status(), 200);
+    let first_etag = resp.headers().get("etag").unwrap().to_str().unwrap().to_owned();
+
+    let stale = upload_one_part(&client, &base, "replaced.bin", "stale").await;
+    let resp = complete_one_part(&client, &base, "replaced.bin", &stale, Some(("If-Match", "\"abc\""))).await;
+    assert_eq!(resp.status(), 412);
+
+    let second = upload_one_part(&client, &base, "replaced.bin", "second").await;
+    let resp = complete_one_part(&client, &base, "replaced.bin", &second, Some(("If-Match", &first_etag))).await;
+    assert_eq!(resp.status(), 200);
+    let get_resp = reqwest::get(format!("{}/replaced.bin", base)).await.expect("GET");
+    assert_eq!(get_resp.bytes().await.unwrap().as_ref(), b"second");
+}
+
+/// An upload whose create-only complete was refused is kept, so a complete without the condition still finishes it.
+#[tokio::test]
+async fn test_multipart_refused_complete_can_be_completed_again() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = reqwest::Client::new();
+
+    let first = upload_one_part(&client, &base, "again.bin", "first").await;
+    assert_eq!(
+        complete_one_part(&client, &base, "again.bin", &first, None)
+            .await
+            .status(),
+        200
+    );
+
+    let second = upload_one_part(&client, &base, "again.bin", "second").await;
+    let refused = complete_one_part(&client, &base, "again.bin", &second, Some(("If-None-Match", "*"))).await;
+    assert_eq!(refused.status(), 412);
+    assert_eq!(
+        complete_one_part(&client, &base, "again.bin", &second, None)
+            .await
+            .status(),
+        200
+    );
+
+    let get_resp = reqwest::get(format!("{}/again.bin", base)).await.expect("GET");
+    assert_eq!(get_resp.bytes().await.unwrap().as_ref(), b"second");
+}
+
+/// A complete whose condition can't be evaluated is refused, and leaves the object as it was: a quoted `"*"` or another
+/// `If-None-Match` value with 501 NotImplemented, as S3 refuses them, and a repeated condition with 400.
+#[tokio::test]
+async fn test_multipart_complete_refuses_conditions_it_cannot_evaluate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = reqwest::Client::new();
+
+    let first = upload_one_part(&client, &base, "kept.bin", "first").await;
+    assert_eq!(
+        complete_one_part(&client, &base, "kept.bin", &first, None)
+            .await
+            .status(),
+        200
+    );
+
+    let second = upload_one_part(&client, &base, "kept.bin", "second").await;
+    for value in ["\"*\"", "\"abc\"", "*, \"abc\""] {
+        let resp = complete_one_part(&client, &base, "kept.bin", &second, Some(("If-None-Match", value))).await;
+        assert_eq!(resp.status(), 501, "{value}");
+        assert_eq!(parse_xml_tag(&resp.text().await.unwrap(), "Code"), "NotImplemented");
+    }
+    let complete_xml = format!(
+        r#"<?xml version="1.0"?><CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>{}</ETag></Part></CompleteMultipartUpload>"#,
+        second.1
+    );
+    let repeated = client
+        .post(format!("{}/kept.bin?uploadId={}", base, second.0))
+        .header("If-None-Match", "\"abc\"")
+        .header("If-None-Match", "*")
+        .body(complete_xml)
+        .send()
+        .await
+        .expect("CompleteMultipartUpload");
+    assert_eq!(repeated.status(), 400);
+
+    let get_resp = reqwest::get(format!("{}/kept.bin", base)).await.expect("GET");
+    assert_eq!(get_resp.bytes().await.unwrap().as_ref(), b"first");
+}
+
+/// Of several create-only completes of different uploads to one key at once, exactly one creates the object, the rest
+/// are refused with 412, and the object has the bytes of the one that was accepted. The check under the store's
+/// write lock decides between completes that pass the early check together.
+#[tokio::test]
+async fn test_multipart_concurrent_create_only_completes_create_once() {
+    const UPLOADS: usize = 8;
+    // Large enough that assembling the parts takes long enough for the completes to overlap.
+    const PART_SIZE: usize = 4 * 1024 * 1024;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let server = spawn_server(dir.path());
+    let base = server.url();
+    let client = reqwest::Client::new();
+
+    let mut uploads = Vec::new();
+    for upload in 0..UPLOADS {
+        let create_resp = client
+            .post(format!("{}/contended.bin?uploads", base))
+            .send()
+            .await
+            .expect("CreateMultipartUpload");
+        let upload_id = parse_xml_tag(&create_resp.text().await.unwrap(), "UploadId");
+        let part_resp = client
+            .put(format!("{}/contended.bin?partNumber=1&uploadId={}", base, upload_id))
+            .body(vec![upload as u8; PART_SIZE])
+            .send()
+            .await
+            .expect("UploadPart");
+        let etag = part_resp.headers().get("etag").unwrap().to_str().unwrap().to_owned();
+        uploads.push((upload_id, etag));
+    }
+
+    let completes = uploads.into_iter().enumerate().map(|(upload, upload_and_etag)| {
+        let client = client.clone();
+        let base = base.clone();
+        tokio::spawn(async move {
+            let resp = complete_one_part(
+                &client,
+                &base,
+                "contended.bin",
+                &upload_and_etag,
+                Some(("If-None-Match", "*")),
+            )
+            .await;
+            (upload, resp.status().as_u16())
+        })
+    });
+    let mut created = Vec::new();
+    for complete in completes.collect::<Vec<_>>() {
+        let (upload, status) = complete.await.unwrap();
+        match status {
+            200 => created.push(upload),
+            412 => {}
+            other => panic!("upload {upload}: unexpected status {other}"),
+        }
+    }
+    assert_eq!(created.len(), 1, "exactly one complete creates the object: {created:?}");
+
+    let get_resp = reqwest::get(format!("{}/contended.bin", base)).await.expect("GET");
+    let body = get_resp.bytes().await.unwrap();
+    assert_eq!(body.len(), PART_SIZE);
+    assert!(
+        body.iter().all(|&byte| byte == created[0] as u8),
+        "the object is the accepted upload's"
+    );
+}

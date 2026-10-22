@@ -10,7 +10,7 @@ use crate::{
     AppState, conditional, etag,
     metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
     multipart_state::{MULTIPART_UPLOAD_DIR, PartEntry, SharedUploadState},
-    s3_xml_compat::{S3ErrorKind, s3_error},
+    s3_xml_compat::{S3ErrorKind, condition_header_error, s3_error},
     store::{FileEntry, SharedStore},
 };
 
@@ -67,15 +67,11 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
     let abs_path = serve_dir.join(&rel_path);
     let user_metadata_headers = metadata_cache::extract_user_metadata_headers(&headers);
 
-    // Parse conditional headers.
-    let if_match = headers
-        .get(header::IF_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let if_none_match = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+    // Parse conditional headers. One that can't be read is refused rather than ignored.
+    let (if_match, if_none_match) = match conditional::write_condition_headers(&headers) {
+        Ok(conditions) => conditions,
+        Err(e) => return condition_header_error(&e),
+    };
 
     // Early conditional check under read lock: reject obviously-failing requests
     // before streaming the body.  This is a best-effort optimization only - the
@@ -83,15 +79,11 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
     // window between body receipt and store update.
     {
         let s = store.read().await;
-        let existing = s.get(&key);
-        match (existing, if_match.as_deref(), if_none_match.as_deref()) {
-            (Some(_), _, Some("*")) => return s3_error(S3ErrorKind::PreconditionFailed),
-            (Some(entry), Some(im), _) if !conditional::etag_matches(&entry.etag, im) => {
-                return s3_error(S3ErrorKind::PreconditionFailed);
-            }
-            (Some(_), Some(_), _) => {}
-            (None, Some(_), _) => return s3_error(S3ErrorKind::PreconditionFailed),
-            _ => {}
+        let existing_etag = s.get(&key).map(|entry| entry.etag.as_str());
+        if conditional::evaluate_write(existing_etag, if_match.as_deref(), if_none_match.as_deref())
+            == conditional::WriteCondition::PreconditionFailed
+        {
+            return s3_error(S3ErrorKind::PreconditionFailed);
         }
     }
 
@@ -147,21 +139,12 @@ async fn put_object(store: SharedStore, key: String, headers: HeaderMap, body: B
 
         // Definitive conditional check - the store entry may have changed since
         // the early check above.
-        let existing = s.get(&key);
-        match (existing, if_match.as_deref(), if_none_match.as_deref()) {
-            (Some(_), _, Some("*")) => {
-                let _ = tokio::fs::remove_file(&tmp_path).await;
-                return s3_error(S3ErrorKind::PreconditionFailed);
-            }
-            (Some(entry), Some(im), _) if !conditional::etag_matches(&entry.etag, im) => {
-                let _ = tokio::fs::remove_file(&tmp_path).await;
-                return s3_error(S3ErrorKind::PreconditionFailed);
-            }
-            (None, Some(_), _) => {
-                let _ = tokio::fs::remove_file(&tmp_path).await;
-                return s3_error(S3ErrorKind::PreconditionFailed);
-            }
-            _ => {}
+        let existing_etag = s.get(&key).map(|entry| entry.etag.as_str());
+        if conditional::evaluate_write(existing_etag, if_match.as_deref(), if_none_match.as_deref())
+            == conditional::WriteCondition::PreconditionFailed
+        {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return s3_error(S3ErrorKind::PreconditionFailed);
         }
 
         // Atomic rename onto the final path (fast: same-filesystem inode update).

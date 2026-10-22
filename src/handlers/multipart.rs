@@ -3,12 +3,12 @@ use std::{collections::HashMap, io, path::Path as FsPath, time::SystemTime};
 
 // == Internal
 use crate::{
-    AppState, etag,
+    AppState, conditional, etag,
     metadata_cache::{self, ChecksumSet, ObjectMetadataCache},
     multipart_state::{PartEntry, UploadEntry},
     s3_xml_compat::{
         CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult, S3ErrorKind,
-        from_xml_bytes, s3_error, to_xml_bytes,
+        condition_header_error, from_xml_bytes, s3_error, to_xml_bytes,
     },
     store::FileEntry,
 };
@@ -46,7 +46,7 @@ pub async fn post_dispatch(
     if params.uploads.is_some() {
         create_multipart_upload(state, key, headers).await
     } else if let Some(upload_id) = params.upload_id {
-        complete_multipart_upload(state, key, upload_id, body).await
+        complete_multipart_upload(state, key, upload_id, headers, body).await
     } else {
         s3_error(S3ErrorKind::InvalidArgument(
             "A valid uploads or uploadId query parameter must be provided.",
@@ -91,7 +91,13 @@ async fn create_multipart_upload(state: AppState, key: String, headers: HeaderMa
 }
 
 /// CompleteMultipartUpload: assemble parts atomically, update store.
-async fn complete_multipart_upload(state: AppState, key: String, upload_id: String, body: Body) -> Response {
+async fn complete_multipart_upload(
+    state: AppState,
+    key: String,
+    upload_id: String,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
     // Collect request body
     let body_bytes = match collect_body(body).await {
         Ok(b) => b,
@@ -144,6 +150,25 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
     let key = crate::store::object_key(&rel_path);
     let abs_path = serve_dir.join(&rel_path);
 
+    // Conditional headers, read and evaluated as for PutObject. A refused complete keeps the upload, as S3 does, so it
+    // can be completed again or aborted.
+    let (if_match, if_none_match) = match conditional::write_condition_headers(&headers) {
+        Ok(conditions) => conditions,
+        Err(e) => return condition_header_error(&e),
+    };
+    let refused = |existing_etag: Option<&str>| {
+        conditional::evaluate_write(existing_etag, if_match.as_deref(), if_none_match.as_deref())
+            == conditional::WriteCondition::PreconditionFailed
+    };
+
+    // Early check, before assembling the parts. The definitive one is under the write lock below.
+    {
+        let s = state.store.read().await;
+        if refused(s.get(&key).map(|entry| entry.etag.as_str())) {
+            return s3_error(S3ErrorKind::PreconditionFailed);
+        }
+    }
+
     if let Some(parent) = abs_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -179,6 +204,12 @@ async fn complete_multipart_upload(state: AppState, key: String, upload_id: Stri
     // put_object.rs).
     {
         let mut s = state.store.write().await;
+
+        // Definitive conditional check: another write may have changed the object since the early check.
+        if refused(s.get(&key).map(|entry| entry.etag.as_str())) {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return s3_error(S3ErrorKind::PreconditionFailed);
+        }
 
         if let Err(e) = tokio::fs::rename(&tmp_path, &abs_path).await {
             warn!("rename {:?} -> {:?} failed: {}", tmp_path, abs_path, e);

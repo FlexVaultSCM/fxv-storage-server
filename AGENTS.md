@@ -26,7 +26,7 @@ no bucket management.
 | PutObject | `PUT /{*key}` | Atomic via temp-file + rename; conditional headers |
 | CreateMultipartUpload | `POST /{*key}?uploads` | Returns XML upload ID |
 | UploadPart | `PUT /{*key}?partNumber=N&uploadId=X` | Parts stored in `.fxv-multipart-uploads/` |
-| CompleteMultipartUpload | `POST /{*key}?uploadId=X` | Assembles parts atomically; XML body |
+| CompleteMultipartUpload | `POST /{*key}?uploadId=X` | Assembles parts atomically; XML body; conditional with `If-None-Match: *` and `If-Match` (412 keeps the upload, so it can be aborted) |
 | DeleteObject | `DELETE /{*key}` | Idempotent 204 delete; clears store/cache entry; conditional with `If-Match` (412 on mismatch, 404 if missing) |
 | AbortMultipartUpload | `DELETE /{*key}?uploadId=X` | Cleans up temp part files |
 
@@ -61,11 +61,12 @@ src/
     multipart.rs       - CreateMultipartUpload, CompleteMultipartUpload, AbortMultipartUpload internals
 tests/
   delete_object.rs     - 11 integration tests
-  get_object.rs        - 8 integration tests
-  put_object.rs        - 9 integration tests
-  multipart.rs         - 5 integration tests
+  get_object.rs        - 9 integration tests
+  put_object.rs        - 11 integration tests
+  multipart.rs         - 11 integration tests
   abort_multipart.rs   - 4 integration tests
-  s3_compat.rs         - 9 integration tests using the aws-sdk-s3 client
+  s3_compat.rs         - 10 integration tests using the aws-sdk-s3 client
+  throughput_bench.rs  - 3 ignored throughput micro-benchmarks of the upload pipeline
 test_scripts/
   rclone_test.py       - Python integration test using rclone as an S3 client (see below)
 ```
@@ -146,6 +147,7 @@ the shared server runner, reducing latency for small request/response exchanges.
 | Content-Type | Default `application/octet-stream`, overrideable via metadata | Supports server-controlled and persisted object metadata |
 | Bucket concept | None | Bucket name is absorbed into the key path |
 | `If-Match: *` on PutObject | "object must exist, any ETag OK" -> 412 if missing | Matches S3 behaviour |
+| `If-Match` / `If-None-Match` on PutObject and CompleteMultipartUpload | Read by `conditional::write_condition_headers` and evaluated by `evaluate_write`, early and again under the store write lock before the rename: 412 if `If-None-Match: *` finds an object, or `If-Match` doesn't match. 412 also for `If-Match` on a missing object, where S3 answers 404. 501 NotImplemented for an `If-None-Match` other than a bare `*`, as S3 refuses it, and 400 if a condition is unreadable or repeated. A refused complete keeps the upload. The server never answers 409 ConditionalRequestConflict, which S3 can send for a conditional complete that races another request on the key | Clients use these to create an object only once and to replace only the version they read, so a condition that can't be evaluated is refused rather than ignored, which would make the write unconditional |
 | `If-Match` on DeleteObject | Evaluated under the store write lock: 204 on match (ETag quoted or not, or `*`), 412 on mismatch or a weak ETag or list, 404 NoSuchKey if the object is missing, 400 if the header is unreadable or repeated | Matches S3 conditional deletes; clients use it to delete only the object they observed, so a condition that can't be evaluated is refused rather than ignored. Relies on the store index's ETags being current, which holds while nothing but the server writes the serve directory |
 | Leading `/` in key | Stripped by `sanitize_key()`; every handler then keys the store by `store::object_key(rel_path)`, the same form startup indexing uses | S3 treats `/key` and `key` as equivalent, so they must be one store entry, or a condition could be evaluated against another spelling's stale entry |
 | ETag comparison | One function, `conditional::etag_matches`, for GET, PUT and DELETE: `*`, or a strong match quoted or not; weak ETags and lists never match | S3 accepts ETags with or without quotes, and a client using one ETag across operations must get the same answer from each |
@@ -193,7 +195,7 @@ as the remote path.
 ## S3 Client Compatibility Tests (`tests/s3_compat.rs`)
 
 Uses `aws-sdk-s3` directly. Tests: GetObject 404, GetObject round-trip, DeleteObject round-trip, conditional DeleteObject,
-GetObject range, GetObject If-None-Match 304, PutObject If-None-Match prevents overwrite,
+GetObject range, GetObject If-None-Match 304, PutObject If-None-Match prevents overwrite, CompleteMultipartUpload If-None-Match prevents overwrite,
 full multipart flow, AbortMultipartUpload.
 
 ---

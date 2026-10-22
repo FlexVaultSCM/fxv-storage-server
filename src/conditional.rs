@@ -2,6 +2,8 @@
 //!
 //! - `evaluate`: RFC 7232 conditions for GET/HEAD, giving 304 Not Modified, 412 Precondition Failed, or proceed.
 //! - `evaluate_delete`: S3 conditional deletes (`If-Match` on DeleteObject), giving 404, 412, or proceed.
+//! - `evaluate_write`: S3 conditional writes (PutObject, CompleteMultipartUpload), giving 412 or proceed.
+//! - `single_header`, `write_condition_headers`: reading the headers, refusing one that can't be read or is repeated.
 //!
 //! S3 evaluation order for GET/HEAD per RFC 7232 s.6:
 //! 1. If-Match               -> 412 on mismatch
@@ -13,7 +15,7 @@
 use std::time::SystemTime;
 
 // == External
-use http::StatusCode;
+use http::{HeaderMap, HeaderName, StatusCode, header};
 
 /// Result of evaluating conditional headers.
 #[derive(Debug, PartialEq, Eq)]
@@ -98,6 +100,87 @@ pub fn evaluate(
 pub(crate) fn etag_matches(etag: &str, header_value: &str) -> bool {
     let v = header_value.trim();
     v == "*" || etag.trim_matches('"') == v.trim_matches('"')
+}
+
+/// Why a request's conditional headers can't be evaluated. Each is refused rather than treated as no condition, which
+/// would turn a conditional write or delete into an unconditional one.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConditionHeaderError {
+    /// The header, by its display name, has a value that isn't visible ASCII.
+    Unreadable(&'static str),
+    /// The header, by its display name, is given more than once.
+    Repeated(&'static str),
+    /// A write's `If-None-Match` has a value other than `*`, which S3 doesn't implement.
+    UnsupportedIfNoneMatch,
+}
+
+impl ConditionHeaderError {
+    /// The message an S3 error response gives for it.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unreadable(name) => format!("The {name} header is invalid."),
+            Self::Repeated(name) => format!("Only one {name} header is supported."),
+            Self::UnsupportedIfNoneMatch => {
+                "A header you provided implies functionality that is not implemented.".into()
+            }
+        }
+    }
+}
+
+/// The value of the request's `name` header, if it has one, or an error for a value that can't be read or a header
+/// given more than once. `display_name` is how the error refers to the header.
+pub fn single_header(
+    headers: &HeaderMap,
+    name: &HeaderName,
+    display_name: &'static str,
+) -> Result<Option<String>, ConditionHeaderError> {
+    let mut values = headers.get_all(name).iter();
+    match (values.next(), values.next()) {
+        (None, _) => Ok(None),
+        (Some(value), None) => value
+            .to_str()
+            .map(|value| Some(value.to_owned()))
+            .map_err(|_| ConditionHeaderError::Unreadable(display_name)),
+        (Some(_), Some(_)) => Err(ConditionHeaderError::Repeated(display_name)),
+    }
+}
+
+/// A write's `If-Match` and `If-None-Match` values, for [`evaluate_write`]. `If-None-Match` must be `*`, the only value
+/// S3 accepts on a write: any other, a quoted `"*"` or a list included, is refused.
+pub fn write_condition_headers(headers: &HeaderMap) -> Result<(Option<String>, Option<String>), ConditionHeaderError> {
+    let if_match = single_header(headers, &header::IF_MATCH, "If-Match")?;
+    let if_none_match = single_header(headers, &header::IF_NONE_MATCH, "If-None-Match")?;
+    if if_none_match.as_deref().is_some_and(|value| value != "*") {
+        return Err(ConditionHeaderError::UnsupportedIfNoneMatch);
+    }
+    Ok((if_match, if_none_match))
+}
+
+/// Result of evaluating a write's conditional headers: a PutObject, or a CompleteMultipartUpload.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WriteCondition {
+    /// Write the object.
+    Proceed,
+    /// Return 412 Precondition Failed.
+    PreconditionFailed,
+}
+
+/// Evaluate a write's `If-Match` and `If-None-Match` headers, as read by [`write_condition_headers`], as S3
+/// conditional writes do.
+///
+/// - `etag`: the current ETag of the object (double-quoted), or `None` if it doesn't exist.
+/// - `if_match`: value of the `If-Match` header, if present: the write proceeds only onto an object with that ETag.
+/// - `if_none_match`: value of the `If-None-Match` header, if present, which is `*`: the write proceeds only when there
+///   is no object.
+///
+/// `If-Match` on a missing object fails with 412 here. S3 answers such a write with 404.
+pub fn evaluate_write(etag: Option<&str>, if_match: Option<&str>, if_none_match: Option<&str>) -> WriteCondition {
+    match (etag, if_match, if_none_match) {
+        (Some(_), _, Some("*")) => WriteCondition::PreconditionFailed,
+        (Some(etag), Some(if_match), _) if !etag_matches(etag, if_match) => WriteCondition::PreconditionFailed,
+        (None, Some(_), _) => WriteCondition::PreconditionFailed,
+        _ => WriteCondition::Proceed,
+    }
 }
 
 /// Result of evaluating a DeleteObject request's `If-Match` header.
@@ -276,6 +359,82 @@ mod tests {
             evaluate(ETAG, ts(2000), None, Some(ETAG), Some(ts(1000)), None),
             ConditionalResult::NotModified
         );
+    }
+
+    #[test]
+    fn test_write_if_none_match_wildcard_requires_no_object() {
+        // Verify `If-None-Match: *` proceeds onto a missing object and fails onto an existing one.
+        assert_eq!(evaluate_write(None, None, Some("*")), WriteCondition::Proceed);
+        assert_eq!(
+            evaluate_write(Some(ETAG), None, Some("*")),
+            WriteCondition::PreconditionFailed
+        );
+    }
+
+    #[test]
+    fn test_write_if_match_requires_the_etag() {
+        // Verify `If-Match` proceeds onto a matching ETag, and fails onto another ETag or a missing object.
+        assert_eq!(evaluate_write(Some(ETAG), Some(ETAG), None), WriteCondition::Proceed);
+        assert_eq!(
+            evaluate_write(Some(ETAG), Some(OTHER_ETAG), None),
+            WriteCondition::PreconditionFailed
+        );
+        assert_eq!(
+            evaluate_write(None, Some(ETAG), None),
+            WriteCondition::PreconditionFailed
+        );
+    }
+
+    #[test]
+    fn test_write_without_conditions_proceeds() {
+        // Verify an unconditional write proceeds whether or not the object exists.
+        assert_eq!(evaluate_write(None, None, None), WriteCondition::Proceed);
+        assert_eq!(evaluate_write(Some(ETAG), None, None), WriteCondition::Proceed);
+    }
+
+    fn headers(pairs: &[(&HeaderName, &[u8])]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.append((*name).clone(), http::HeaderValue::from_bytes(value).unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn test_write_condition_headers_read_one_of_each() {
+        // Verify an absent condition is None, and a single readable one is its value.
+        assert_eq!(write_condition_headers(&HeaderMap::new()), Ok((None, None)));
+        assert_eq!(
+            write_condition_headers(&headers(&[
+                (&header::IF_MATCH, ETAG.as_bytes()),
+                (&header::IF_NONE_MATCH, b"*")
+            ])),
+            Ok((Some(ETAG.to_string()), Some("*".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_write_condition_headers_refuse_what_they_cannot_evaluate() {
+        // Verify a repeated or unreadable condition, and an If-None-Match other than a bare `*`, is an error rather
+        // than no condition.
+        assert_eq!(
+            write_condition_headers(&headers(&[
+                (&header::IF_NONE_MATCH, b"\"abc\""),
+                (&header::IF_NONE_MATCH, b"*")
+            ])),
+            Err(ConditionHeaderError::Repeated("If-None-Match"))
+        );
+        assert_eq!(
+            write_condition_headers(&headers(&[(&header::IF_MATCH, b"\xff")])),
+            Err(ConditionHeaderError::Unreadable("If-Match"))
+        );
+        for value in [&b"\"*\""[..], b"*, \"abc\"", b"\"abc\""] {
+            assert_eq!(
+                write_condition_headers(&headers(&[(&header::IF_NONE_MATCH, value)])),
+                Err(ConditionHeaderError::UnsupportedIfNoneMatch),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]
